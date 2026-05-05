@@ -1,0 +1,2 @@
+# This file preserves the voice_cache directory in git
+# Generated voice cache files are not committed (see .gitignore)

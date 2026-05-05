@@ -1,0 +1,26 @@
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+python-dotenv==1.0.0
+httpx==0.25.0
+# Computer Vision & Deep Learning
+opencv-python==4.8.0.76
+Pillow==10.0.1
+
+# Face Detection & Recognition
+deepface==0.0.79
+FER==22.5.1
+
+# Deep Learning & Neural Networks
+tensorflow==2.13.1
+keras==2.13.1
+torch==2.0.1
+torchvision==0.15.2
+
+# Object Detection
+ultralytics==8.0.196
+scikit-image==0.21.0
+
+# Utils
+numpy==1.24.3
+scipy==1.11.2

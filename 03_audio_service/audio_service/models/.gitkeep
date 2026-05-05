@@ -1,0 +1,2 @@
+# This file ensures the models directory is tracked by git even when empty
+# The voice_embeddings.pkl file will be generated automatically when speakers are enrolled

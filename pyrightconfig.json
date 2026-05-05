@@ -1,0 +1,27 @@
+{
+  "include": ["01_central_server", "06_enrollment_service"],
+  "exclude": [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.*",
+    "venv",
+    ".venv",
+    ".env",
+    "**/build",
+    "**/dist",
+    "02_vision_service",
+    "03_audio_service",
+    "04_tts_service",
+    "05_teachme_service",
+    "07_llm_service",
+    "tests",
+    "scripts"
+  ],
+  "pythonVersion": "3.11",
+  "pythonPlatform": "Windows",
+  "typeCheckingMode": "off",
+  "reportMissingImports": false,
+  "reportMissingModuleSource": false,
+  "stubPath": "typings",
+  "extraPaths": ["shared"]
+}

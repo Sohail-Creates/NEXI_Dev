@@ -1,0 +1,7 @@
+{
+  "default_english_voice": "ryan",
+  "default_urdu_voice": "shahid",
+  "optimize_models": true,
+  "language_timeout_seconds": 600,
+  "memory_limit_mb": 300
+}
