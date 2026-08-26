@@ -1,0 +1,41 @@
+# docker-compose.override.yml
+# Copy this file to docker-compose.override.yml for local development overrides
+# This file is gitignored - your local changes won't be committed
+
+version: "3.8"
+
+services:
+  # Example: Enable GPU for vision service
+  # vision:
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+
+  # Example: Skip model downloads (use pre-downloaded volumes)
+  # vision:
+  #   environment:
+  #     - DOWNLOAD_MODELS=false
+
+  # Example: Mount local code for hot-reload development
+  # central:
+  #   volumes:
+  #     - ./01_central_server:/app
+
+  # Example: Expose additional ports for debugging
+  # audio:
+  #   ports:
+  #     - "8002:8002"
+  #     - "5678:5678"  # debugpy
+
+  # Example: Resource limits for resource-constrained hosts
+  # vision:
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         memory: 4G
+  #       reservations:
+  #         memory: 2G

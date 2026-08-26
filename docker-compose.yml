@@ -1,0 +1,198 @@
+version: "3.8"
+
+services:
+  # 1. Central Server
+  central:
+    build:
+      context: .
+      dockerfile: docker/central.Dockerfile
+    container_name: nexi-central
+    ports: ["8000:8000"]
+    env_file: .env
+    volumes:
+      - central_data:/app/data
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [nexi-net]
+
+  # 2. Vision Service (heaviest)
+  vision:
+    build:
+      context: .
+      dockerfile: docker/vision.Dockerfile
+    container_name: nexi-vision
+    ports: ["8001:8001"]
+    env_file: .env
+    volumes:
+      - vision_models:/app/models
+      - vision_data:/app/data
+      - ./logs:/app/logs
+    devices:
+      - /dev/video0:/dev/video0
+    environment:
+      - DISPLAY=${DISPLAY:-:0}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    networks: [nexi-net]
+    depends_on:
+      central:
+        condition: service_healthy
+
+  # 3. Audio Service
+  audio:
+    build:
+      context: .
+      dockerfile: docker/audio.Dockerfile
+    container_name: nexi-audio
+    ports: ["8002:8002"]
+    env_file: .env
+    volumes:
+      - audio_data:/app/data
+      - audio_models:/app/models
+      - ./logs:/app/logs
+    devices:
+      - /dev/snd:/dev/snd
+    volumes:
+      - /run/pulse/native:/run/pulse/native
+    environment:
+      - PULSE_SERVER=unix:/run/pulse/native
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [nexi-net]
+    depends_on:
+      central:
+        condition: service_healthy
+
+  # 4. TTS Service
+  tts:
+    build:
+      context: .
+      dockerfile: docker/tts.Dockerfile
+    container_name: nexi-tts
+    ports: ["8003:8003"]
+    env_file: .env
+    volumes:
+      - tts_models:/app/models
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [nexi-net]
+
+  # 5. TeachMe (RAG)
+  teachme:
+    build:
+      context: .
+      dockerfile: docker/teachme.Dockerfile
+    container_name: nexi-teachme
+    ports: ["8004:8004"]
+    env_file: .env
+    volumes:
+      - teachme_data:/app/data
+      - teachme_indexes:/app/indexes
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [nexi-net]
+    depends_on:
+      vision:
+        condition: service_healthy
+
+  # 6. Enrollment
+  enrollment:
+    build:
+      context: .
+      dockerfile: docker/enrollment.Dockerfile
+    container_name: nexi-enrollment
+    ports: ["8005:8005"]
+    env_file: .env
+    volumes:
+      - enrollment_data:/app/enrollment_data
+      - ./logs:/app/logs
+    devices:
+      - /dev/video0:/dev/video0
+      - /dev/snd:/dev/snd
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [nexi-net]
+
+  # 7. LLM Service
+  llm:
+    build:
+      context: .
+      dockerfile: docker/llm.Dockerfile
+    container_name: nexi-llm
+    ports: ["8006:8006"]
+    env_file: .env
+    volumes:
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8006/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [nexi-net]
+
+  # 8. CLI Runner (nexctl)
+  nexctl:
+    build:
+      context: .
+      dockerfile: docker/nexctl.Dockerfile
+    container_name: nexi-nexctl
+    env_file: .env
+    volumes:
+      - ./logs:/app/logs
+      - /dev/video0:/dev/video0
+      - /dev/snd:/dev/snd
+    stdin_open: true
+    tty: true
+    networks: [nexi-net]
+    depends_on:
+      - central
+      - vision
+      - audio
+      - tts
+      - teachme
+      - enrollment
+      - llm
+    command: ["python", "nexctl.py"]
+
+volumes:
+  central_data:
+  vision_models:
+  vision_data:
+  audio_data:
+  audio_models:
+  tts_models:
+  teachme_data:
+  teachme_indexes:
+  enrollment_data:
+
+networks:
+  nexi-net:
+    driver: bridge

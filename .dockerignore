@@ -30,13 +30,12 @@ models/
 *.json
 
 # Build
+docker/
 *.whl
 dist/
 build/
 
-# Docker
-# docker/  # Commit Dockerfiles for portability
-
-# Environment
-.env
-*.env.local
+# CI
+.github/
+.git/
+.gitignore
