@@ -149,13 +149,17 @@ class EmbeddingIndex:
         Search for similar embeddings.
         
         Args:
-            query_embedding: Query vector (list of floats)
+            query_embedding: Query vector (list of floats or numpy array)
             k: Number of results to return
             threshold: Minimum similarity score (0.0-1.0), higher = more similar
             
         Returns:
             List of (item_id, similarity_score) tuples, sorted by similarity
         """
+        # Handle numpy array input
+        if hasattr(query_embedding, 'tolist'):
+            query_embedding = query_embedding.tolist()
+        
         if not query_embedding or len(query_embedding) == 0:
             return []
         

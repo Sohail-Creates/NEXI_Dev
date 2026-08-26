@@ -54,16 +54,14 @@ async def lifespan(app: FastAPI):
         logger.info(f"Configuration loaded:")
         logger.info(f"   Embedding model: {Config.EMBEDDING_MODEL}")
         logger.info(f"   Detector backend: {Config.DETECTOR_BACKEND}")
-        logger.info(f"   Emotion detection: {'ENABLED' if Config.ENABLE_EMOTION_DETECTION else 'DISABLED'}")
         logger.info(f"   Log level: {Config.LOG_LEVEL}")
         logger.info(f"   Camera timeout: {Config.CAMERA_TIMEOUT}s")
         
         # Validate configuration
         Config.validate()
         
-        # Create and initialize resource pool with Central Server camera management
+        # Create and initialize resource pool
         _resource_pool = ResourcePool(
-            enable_emotion_detection=Config.ENABLE_EMOTION_DETECTION,
             camera_timeout=Config.CAMERA_TIMEOUT,
             central_server_url=Config.CENTRAL_SERVER_URL,
             enable_object_detection=Config.ENABLE_OBJECT_DETECTION,
@@ -71,7 +69,7 @@ async def lifespan(app: FastAPI):
         )
         logger.info(" Resource pool initialized with Central Server camera management")
         
-        # Load embedding model with retry logic (Vision-Nexus pattern)
+        # Load embedding model with retry logic
         try:
             success = load_model_with_retry(
                 model_name=Config.EMBEDDING_MODEL,
@@ -90,17 +88,6 @@ async def lifespan(app: FastAPI):
         streaming.set_resource_pool(_resource_pool)
         camera.set_resource_pool(_resource_pool)
         logger.info(" Route handlers initialized")
-        
-        # Camera check on startup is optional - it will be checked on first request
-        # This prevents aggressive initialization during Central Server startup race conditions
-        logger.info(" Camera resource client ready (checks deferred to first request)")
-        
-        # Test FER availability if enabled
-        if Config.ENABLE_EMOTION_DETECTION:
-            if _resource_pool.is_fer_available():
-                logger.info(" Emotion detection is available")
-            else:
-                logger.warning(" Emotion detection is not available")
         
         # Test YOLO availability if enabled
         if Config.ENABLE_OBJECT_DETECTION:
@@ -142,15 +129,11 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     """
     Create and configure FastAPI application
-    From Vision-Nexus production setup
-    
-    Returns:
-        FastAPI application instance
     """
     
     app = FastAPI(
         title="NEXI Vision Service",
-        description="Production-grade vision service for face detection, recognition, and emotion analysis",
+        description="Production-grade vision service for face detection, recognition",
         version="4.0.0",
         lifespan=lifespan
     )
@@ -165,7 +148,6 @@ def create_app() -> FastAPI:
     )
     
     # Add Phase 1 security: Rate limiting middleware
-    # Exempt: /health endpoints (should always be available)
     rate_limit_middleware = create_rate_limit_middleware()
     app.middleware("http")(rate_limit_middleware)
     

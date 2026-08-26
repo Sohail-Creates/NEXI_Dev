@@ -194,10 +194,11 @@ app.add_middleware(
     allowed_hosts=os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
 )
 
-# Add Phase 1 security: Rate limiting middleware
-# Exempt: /health endpoints (should always be available)
-rate_limit_middleware = create_rate_limit_middleware()
-app.middleware("http")(rate_limit_middleware)
+# Routes
+from .routes import teach, query, objects
+app.include_router(teach.router)
+app.include_router(query.router)
+app.include_router(objects.router)
 
 # ============= CACHE FUNCTIONS (Phase 3 Optimization) =============
 def get_cached_result(query_key: str) -> Optional[Dict[str, Any]]:
@@ -240,15 +241,16 @@ async def rate_limit_middleware(request: Request, call_next):
     response = await call_next(request)
     return response
 
+from .services.query_history_store import QueryHistoryStore
+from .services.query_rotation_policy import QueryRotationPolicy
+
+history_store = QueryHistoryStore()
+rotation_policy = QueryRotationPolicy(storage_dir=history_store.storage_dir)
+
 @app.on_event("startup")
 async def startup_event():
-    logger.info("=" * 80)
-    logger.info("TeachMe Service Starting - PRODUCTION READY")
-    logger.info("=" * 80)
-    logger.info(f"Version: 4.1.0 | Port: {server_config.PORT}")
-    logger.info(f"Security: Rate Limiting + CORS + Input Validation + Auth")
-    logger.info(f"Vision Service: {vision_config.get_base_url()} (with Circuit Breaker)")
-    logger.info("=" * 80)
+    # ... existing code ...
+    rotation_policy.run_cleanup()
     
     # NEW: Initialize resilient systems
     try:

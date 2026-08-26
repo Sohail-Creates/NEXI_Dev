@@ -1,6 +1,6 @@
 """
 Vision Service Resource Pool
-Thread-safe management of camera and emotion detection resources
+Thread-safe management of camera and object detection resources
 Production implementation from Vision-Nexus
 """
 
@@ -17,16 +17,15 @@ logger = logging.getLogger(__name__)
 
 
 class ResourcePool:
-    """Thread-safe resource pool for camera, FER detector, and YOLO object detector"""
+    """Thread-safe resource pool for camera and YOLO object detector"""
     
-    def __init__(self, enable_emotion_detection: bool = True, camera_timeout: int = 10,
+    def __init__(self, camera_timeout: int = 10,
                  central_server_url: str = "http://localhost:8000",
                  enable_object_detection: bool = True, object_model_name: str = "yolov8n"):
         """
         Initialize resource pool
         
         Args:
-            enable_emotion_detection: Whether to enable FER emotion detection
             camera_timeout: Timeout for camera access in seconds
             central_server_url: URL of Central Server for camera resource management
             enable_object_detection: Whether to enable YOLO object detection
@@ -34,13 +33,10 @@ class ResourcePool:
         """
         self._camera = None
         self._camera_lock = threading.RLock()
-        self._fer_detector = None
-        self._fer_lock = threading.RLock()
         self._object_detector = None
         self._object_detector_lock = threading.RLock()
         self._is_shutting_down = False
         self._camera_timeout = camera_timeout
-        self.enable_emotion_detection = enable_emotion_detection
         self.enable_object_detection = enable_object_detection
         self.object_model_name = object_model_name
         
@@ -100,31 +96,6 @@ class ResourcePool:
             # RELEASE CAMERA BACK TO CENTRAL SERVER
             self._camera_client.release_camera()
     
-    def get_fer_detector(self):
-        """
-        Get FER (Facial Expression Recognition) detector instance
-        Lazy initialization with thread safety (Vision-Nexus pattern)
-        
-        Returns:
-            FER detector instance or None if emotion detection disabled
-        """
-        if not self.enable_emotion_detection:
-            return None
-            
-        acquired = self._fer_lock.acquire(timeout=120)  # Model loading timeout
-        if not acquired:
-            raise RuntimeError("FER detector lock timeout - model loading in progress")
-        
-        try:
-            if self._fer_detector is None:
-                logger.info("Initializing FER emotion detector...")
-                from fer import FER
-                self._fer_detector = FER(mtcnn=False)
-                logger.info("FER emotion detector initialized successfully")
-            return self._fer_detector
-        finally:
-            self._fer_lock.release()
-    
     def is_camera_available(self) -> bool:
         """Check if camera is available and working"""
         try:
@@ -132,17 +103,6 @@ class ResourcePool:
                 return True
         except Exception as e:
             logger.warning(f"Camera availability check failed: {e}")
-            return False
-    
-    def is_fer_available(self) -> bool:
-        """Check if FER detector is available"""
-        if not self.enable_emotion_detection:
-            return False
-        try:
-            fer = self.get_fer_detector()
-            return fer is not None
-        except Exception as e:
-            logger.warning(f"FER availability check failed: {e}")
             return False
     
     def get_object_detector(self):
@@ -209,10 +169,6 @@ class ResourcePool:
                     logger.error(f"Error releasing camera: {e}")
                 finally:
                     self._camera = None
-        
-        with self._fer_lock:
-            self._fer_detector = None
-            logger.info("FER detector resources released")
         
         with self._object_detector_lock:
             self._object_detector = None

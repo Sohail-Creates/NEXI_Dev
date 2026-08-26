@@ -20,6 +20,9 @@ except ImportError:
 from .models import KnowledgeItem, LearningType, ObjectData, FactData
 from .config import storage_config, performance_config, search_index_config
 from .embedding_index import EmbeddingIndex
+from .services.embedding_client import EmbeddingClient
+from .services.dedup_checker import DedupChecker
+from .services.confidence_gate import ConfidenceGate
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +47,9 @@ class PersistentKnowledgeBase:
             dimension=search_index_config.INDEX_DIMENSION,
             use_faiss=search_index_config.USE_FAISS
         )
+        self.embedding_client = EmbeddingClient()
+        self.dedup_checker = DedupChecker()
+        self.confidence_gate = ConfidenceGate()
         
         # Backup directory
         os.makedirs(self.backup_dir, exist_ok=True)

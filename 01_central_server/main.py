@@ -14,6 +14,18 @@ from teachme_routes import router as teachme_router
 from resource_routes import router as resource_router
 from teachme_connector import init_teachme_connector
 from service_config import get_config
+from services.cloud_sync_service import CloudSyncService
+import os
+
+sync_service = CloudSyncService(
+    history_dir="D:\\TRUSTNEXUS\\NEXI_Refactor\\TN-NEXI\\05_teachme_service\\teachme_service\\data\\history",
+    cloud_url=os.getenv("CLOUD_SYNC_URL", "https://api.yourcloud.com")
+)
+
+async def daily_sync_task():
+    while True:
+        await sync_service.sync_history()
+        await asyncio.sleep(86400) # 24 hours
 
 # Import Phase 1 security modules (from shared/)
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -48,12 +60,16 @@ def create_app() -> FastAPI:
     async def startup_event():
         """Initialize services on startup"""
         try:
+            import json
             config = get_config()
             teachme_config = config.services.get_service_configs().get("teachme", {})
             await init_teachme_connector(config=teachme_config)
             print(" TeachMe connector initialized")
+            asyncio.create_task(daily_sync_task())
         except Exception as e:
+            import json
             print(f"Warning: TeachMe connector failed to initialize: {e}")
+
 
     return app
 

@@ -9,7 +9,6 @@ Pillow==10.0.1
 
 # Face Detection & Recognition
 deepface==0.0.79
-FER==22.5.1
 
 # Deep Learning & Neural Networks
 tensorflow==2.13.1

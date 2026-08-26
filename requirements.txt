@@ -1,17 +1,9 @@
 ﻿# ========== Deep Learning ==========
-# CONFLICTED (commented): keras==2.13.1  # package commented due to known version incompatibilities
+# Removed: keras, safetensors, tensorboard*, tensorflow*
 onnxruntime==1.24.2
-# CONFLICTED (commented): safetensors==0.7.0  # package commented due to known version incompatibilities
-# CONFLICTED (commented): tensorboard==2.13.0  # package commented due to known version incompatibilities
-# CONFLICTED (commented): tensorboard-data-server==0.7.2  # package commented due to known version incompatibilities
-# CONFLICTED (commented): tensorflow==2.13.1  # package commented due to known version incompatibilities
-# CONFLICTED (commented): tensorflow-estimator==2.13.0  # package commented due to known version incompatibilities
-# CONFLICTED (commented): tensorflow-intel==2.13.1  # package commented due to known version incompatibilities
-# CONFLICTED (commented): tensorflow-io-gcs-filesystem==0.31.0  # package commented due to known version incompatibilities
 torch==2.10.0
 torchaudio==2.10.0
 torchvision==0.25.0
-transformers==5.2.0
 ultralytics==8.4.19
 ultralytics-thop==2.0.18
 
@@ -28,7 +20,6 @@ scikit-image==0.26.0
 # ========== Audio ==========
 audioread==3.1.0
 librosa==0.11.0
-openai-whisper==20250625
 piper-tts==1.4.1
 PyAudio==0.2.14
 Resemblyzer==0.1.4
@@ -36,6 +27,7 @@ sounddevice==0.5.5
 soundfile==0.13.1
 soxr==1.0.0
 webrtcvad-wheels @ file:///D:/Internship/TN_Team/Nexi_Robo/webrtcvad_wheels-2.0.14-cp311-cp311-win_amd64.whl#sha256=0d9ad6ef4ef7c89228469df52a4657886055a9f1ab036ede09400e2279ac5c70
+keyboard==0.13.5
 
 # ========== Web/API ==========
 fastapi==0.129.0

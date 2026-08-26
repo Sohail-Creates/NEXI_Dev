@@ -56,7 +56,7 @@ async def health_check_detailed():
     # Quick status - don't try to access camera (that blocks!)
     # Camera is checked on first request when needed
     camera_status = "available"  # Assume available, will fail gracefully if not
-    emotion_status = "enabled" if Config.ENABLE_EMOTION_DETECTION else "disabled"
+    emotion_status = "disabled"
     
     return HealthCheckResponse(
         status="healthy",  # Service is running and ready

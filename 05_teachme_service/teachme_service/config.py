@@ -60,7 +60,7 @@ class SearchIndexConfig:
     """Embedding search index settings"""
     
     USE_FAISS: bool = os.getenv("USE_FAISS", "true").lower() == "true"
-    INDEX_DIMENSION: int = int(os.getenv("INDEX_DIMENSION", "128"))
+    INDEX_DIMENSION: int = int(os.getenv("INDEX_DIMENSION", "768"))
     INDEX_METRIC: str = os.getenv("INDEX_METRIC", "cosine")
     
     # Fallback to linear search if index fails

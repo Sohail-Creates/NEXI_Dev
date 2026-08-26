@@ -32,6 +32,7 @@ from audio_service.config import (
     VAD_CONFIG,
     POWER_CONFIG
 )
+from audio_service.services.keyboard_wake_word import KeyboardWakeWordListener
 from audio_service.utils.vad import VoiceActivityDetector
 from audio_service.utils.errors import (
     WakeWordError,
@@ -74,6 +75,8 @@ class WakeWordService:
         self.detection_thread: Optional[threading.Thread] = None
         self.audio_stream: Optional[sd.InputStream] = None
         self.detection_callback: Optional[Callable] = None
+        self.keyboard_listener: Optional[KeyboardWakeWordListener] = None
+        self.using_keyboard: bool = False
         
         # Audio buffer for pre-wake word context
         # This stores audio before wake word is detected so we can include it
@@ -146,56 +149,40 @@ class WakeWordService:
         logger.info(f"Power mode changed to: {mode}")
     
     def initialize_porcupine(self):
-        """
-        Initialize Porcupine wake word detection engine.
-        
-        This sets up the Porcupine instance with the configured keyword and sensitivity.
-        Porcupine is a lightweight wake word detection engine that runs entirely on-device.
-        
-        Raises:
-            WakeWordError: If initialization fails
-        """
+        """Initialize Porcupine wake word engine, falling back to keyboard bypass on failure."""
         try:
-            if not PORCUPINE_ACCESS_KEY:
-                raise WakeWordError(
-                    "Porcupine access key not found. Please set PORCUPINE_ACCESS_KEY in .env file"
-                )
-            
-            # Check if custom keyword model file exists
-            keyword_path = WAKE_WORD_CONFIG["keyword_path"]
-            if keyword_path is None:
-                raise WakeWordError(
-                    "Custom wake word model path not configured. Expected: 03_audio_service/wake_word_models/Window/Hey-Nex-e_en_windows_v4_0_0.ppn"
-                )
-            if not keyword_path.exists():
-                raise WakeWordError(
-                    f"Custom wake word model file not found at: {keyword_path}"
-                )
-            
-            # Initialize Porcupine with custom keyword model file
-            # Using "Hey-Nex-e" custom trained model
             self.porcupine = pvporcupine.create(
                 access_key=PORCUPINE_ACCESS_KEY,
-                keyword_paths=[str(keyword_path)],
+                keyword_paths=[str(WAKE_WORD_CONFIG["keyword_path"])],
                 sensitivities=[WAKE_WORD_CONFIG["sensitivity"]]
             )
-            
-            logger.info(
-                f"Porcupine initialized with custom wake word model '{keyword_path.name}' "
-                f"(sensitivity: {WAKE_WORD_CONFIG['sensitivity']})"
-            )
-            
+            self.using_keyboard = False
+            logger.info("Porcupine initialized")
         except Exception as e:
-            error_msg = f"Failed to initialize Porcupine: {str(e)}"
-            logger.error(error_msg)
-            raise WakeWordError(error_msg, technical_details=str(e)) from e
-    
+            logger.error(f"Porcupine init failed: {e}. Switching to keyboard bypass.")
+            self.porcupine = None
+            self.using_keyboard = True
+            if self.keyboard_listener is None:
+                self.keyboard_listener = KeyboardWakeWordListener(
+                    callback=self._handle_wake_word_detected
+                )
+                self.keyboard_listener.start()
+
+    def _handle_wake_word_detected(self, keyword, confidence):
+        """Handle keyboard-triggered wake word."""
+        if self.detection_callback:
+            logger.info(f"Wake word detected callback: keyword={keyword}, confidence={confidence}")
+            self.detection_callback("KeyboardTrigger.wav", confidence)
+
     def cleanup_porcupine(self):
         """Release Porcupine resources."""
         if self.porcupine is not None:
             self.porcupine.delete()
             self.porcupine = None
             logger.info("Porcupine resources released")
+        if self.keyboard_listener is not None:
+            self.keyboard_listener.stop()
+            self.keyboard_listener = None
     
     def start_listening(self, detection_callback: Optional[Callable] = None):
         """
@@ -301,6 +288,13 @@ class WakeWordService:
         When a wake word is detected, it records the command and triggers the callback.
         """
         logger.info(f"Detection loop started - power_mode={self.power_mode}, VAD={'enabled' if self.vad else 'disabled'}")
+        
+        # Keyboard bypass mode: no audio stream, keyboard listener drives callbacks
+        if self.using_keyboard or self.porcupine is None:
+            logger.info("Keyboard bypass mode active - waiting for keyboard wake word trigger")
+            while self.is_listening:
+                time.sleep(0.2)
+            return
         
         try:
             # Porcupine requires specific frame length

@@ -738,16 +738,13 @@ class STTService:
             logger.error(f"Audio validation failed: {str(e)}")
             return False
     
-    def transcribe_local(
+    def transcribe_audio(
         self,
         audio_file_path: str,
         language: str = "auto"
     ) -> Tuple[str, str, float]:
         """
-        Transcribe audio using local Whisper model (offline fallback).
-        
-        This method uses OpenAI Whisper loaded locally, enabling transcription
-        without internet connectivity. Used as fallback when Groq API is unavailable.
+        Transcribe audio using Groq Whisper API (primary online STT).
         
         Args:
             audio_file_path: Path to audio file
@@ -755,89 +752,10 @@ class STTService:
         
         Returns:
             Tuple of (transcription_text, detected_language, duration_seconds)
-        
-        Raises:
-            TranscriptionError: If transcription fails
         """
-        try:
-            import whisper
-            from pathlib import Path
-            
-            logger.info(f"Starting local Whisper transcription for: {audio_file_path}")
-            start_time = time.time()
-            
-            # Load local Whisper model (cached after first load)
-            if not hasattr(self, '_local_whisper_model'):
-                model_size = ENHANCED_STT_CONFIG.get("local_whisper_model", "base")
-                logger.info(f"Loading local Whisper model: {model_size}")
-                self._local_whisper_model = whisper.load_model(model_size)
-                logger.info("Local Whisper model loaded successfully")
-            
-            # Validate audio file
-            audio_path = Path(audio_file_path)
-            if not audio_path.exists():
-                raise TranscriptionError(f"Audio file not found: {audio_file_path}")
-            
-            # Load and preprocess audio
-            audio_data, sample_rate = load_audio_file(audio_file_path)
-            duration = len(audio_data) / sample_rate
-            
-            # Check for silence
-            if self._is_audio_silent(audio_data, sample_rate):
-                raise SilenceDetectedError("Audio contains only silence")
-            
-            # Prepare transcription options
-            transcribe_options = {
-                "fp16": False,  # Use FP32 for better CPU compatibility
-                "verbose": False
-            }
-            
-            # Set language if not auto-detect
-            if language and language != "auto":
-                transcribe_options["language"] = language
-            
-            # Transcribe with local model
-            result = self._local_whisper_model.transcribe(
-                str(audio_path),
-                **transcribe_options
-            )
-            
-            # Extract results
-            transcription_text = result.get("text", "").strip()
-            detected_language = result.get("language", language if language != "auto" else "en")
-            
-            # Validate transcription
-            if not transcription_text:
-                raise EmptyTranscriptionError("Local Whisper returned empty transcription")
-            
-            # Calculate latency
-            latency = time.time() - start_time
-            
-            # Update statistics
-            self.stats["total_transcriptions"] += 1
-            self.stats["successful_transcriptions"] += 1
-            self.stats["language_detections"][detected_language] = \
-                self.stats["language_detections"].get(detected_language, 0) + 1
-            
-            logger.info(
-                f"Local Whisper transcription successful: "
-                f"duration={duration:.2f}s, language={detected_language}, "
-                f"latency={latency:.2f}s, text_length={len(transcription_text)}"
-            )
-            
-            return transcription_text, detected_language, duration
-            
-        except (SilenceDetectedError, EmptyTranscriptionError):
-            raise
-        except ImportError as e:
-            logger.error("Local Whisper not available - install openai-whisper package")
-            raise TranscriptionError(
-                "Local Whisper model not installed. Install with: pip install openai-whisper"
-            )
-        except Exception as e:
-            self.stats["failed_transcriptions"] += 1
-            logger.error(f"Local Whisper transcription failed: {e}", exc_info=True)
-            raise TranscriptionError(f"Local transcription failed: {e}")
+        # (This is already the primary implementation using Groq API)
+        return self._transcribe_with_groq(audio_file_path, language)
+
     
     def get_supported_languages(self) -> list:
         """

@@ -1479,20 +1479,19 @@ async def get_circuit_breaker_status():
     status_code=status.HTTP_200_OK,
     summary="Complete voice processing pipeline"
 )
-async def process_pipeline(offline_mode: bool = False, send_to_backend: bool = True):
+async def process_pipeline(send_to_backend: bool = True):
     """
     Complete end-to-end voice processing pipeline.
     
     This endpoint orchestrates the complete workflow:
     1. Detect wake word
     2. Record command with silence detection
-    3. Transcribe audio (online or offline)
+    3. Transcribe audio (via Groq API)
     4. Verify speaker (optional)
     5. Send results to backend (if online)
     6. Queue for later (if offline)
     
     Args:
-        offline_mode: Use local Whisper instead of Groq API
         send_to_backend: Send results to central backend server
     
     Returns:
@@ -1504,8 +1503,7 @@ async def process_pipeline(offline_mode: bool = False, send_to_backend: bool = T
         from audio_service.config import QUEUE_CONFIG, BACKEND_CONFIG
         
         logger.info(
-            f"Starting pipeline: offline_mode={offline_mode}, "
-            f"send_to_backend={send_to_backend}"
+            f"Starting pipeline: send_to_backend={send_to_backend}"
         )
         
         pipeline_start = datetime.now()
@@ -1557,20 +1555,13 @@ async def process_pipeline(offline_mode: bool = False, send_to_backend: bool = T
             return results
         
         # Step 3: Transcribe audio
-        logger.info(f"Pipeline Step 3: Transcribing (offline={offline_mode})...")
+        logger.info("Pipeline Step 3: Transcribing...")
         try:
-            if offline_mode:
-                # Use local Whisper
-                text, language, duration = stt_service.transcribe_local(
-                    audio_file_path=audio_file,
-                    language="auto"
-                )
-            else:
-                # Use Groq API
-                text, language, duration = stt_service.transcribe_audio(
-                    audio_file_path=audio_file,
-                    language="auto"
-                )
+            # Always use Groq API path
+            text, language, duration = stt_service.transcribe_audio(
+                audio_file_path=audio_file,
+                language="auto"
+            )
             
             results["steps"]["transcription"] = {
                 "status": "success",
@@ -1609,7 +1600,7 @@ async def process_pipeline(offline_mode: bool = False, send_to_backend: bool = T
                         metadata={
                             "language": language,
                             "duration": duration,
-                            "offline_mode": offline_mode,
+                            "offline_mode": False,
                             "audio_file": audio_file
                         }
                     )
@@ -1636,7 +1627,7 @@ async def process_pipeline(offline_mode: bool = False, send_to_backend: bool = T
                             "metadata": {
                                 "language": language,
                                 "duration": duration,
-                                "offline_mode": offline_mode,
+                                "offline_mode": False,
                                 "audio_file": audio_file
                             }
                         },

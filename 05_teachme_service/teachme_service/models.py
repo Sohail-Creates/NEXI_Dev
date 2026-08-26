@@ -50,3 +50,29 @@ class SyncResponse(BaseModel):
     success: bool
     message: str
     synced_count: int
+
+class TeachingRequest(BaseModel):
+    owner_id: str
+    image_base64: str
+    label_text: str
+    metadata: Optional[Dict[str, Any]] = None
+
+class QueryRequest(BaseModel):
+    owner_id: str
+    image_base64: Optional[str] = None
+    query_text: str
+
+class KnowledgeObject(BaseModel):
+    object_id: str
+    label: str
+    metadata: Dict[str, Any]
+    confidence: float
+
+class QueryHistoryItem(BaseModel):
+    query_id: str
+    owner_id: str
+    query_text: str
+    response_text: str
+    confidence: float
+    timestamp: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    metadata: Optional[Dict[str, Any]] = None

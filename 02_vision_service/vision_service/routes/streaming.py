@@ -87,77 +87,19 @@ def generate_frames():
                             align=True
                         )
                         
-                        emotions_detected: List[Tuple[str, float]] = []
-                        
-                        # Try emotion detection
-                        try:
-                            fer = _resource_pool.get_fer_detector()
-                            
-                            if fer is not None:
-                                for face_obj in face_objs:
-                                    facial_area = face_obj.get('facial_area', {})
-                                    x = facial_area.get('x', 0)
-                                    y = facial_area.get('y', 0)
-                                    w = facial_area.get('w', 0)
-                                    h = facial_area.get('h', 0)
-                                    
-                                    # Extract face region with padding
-                                    padding = 20
-                                    y1 = max(0, y - padding)
-                                    y2 = min(frame.shape[0], y + h + padding)
-                                    x1 = max(0, x - padding)
-                                    x2 = min(frame.shape[1], x + w + padding)
-                                    
-                                    face_region = frame[y1:y2, x1:x2]
-                                    
-                                    # Detect emotion
-                                    try:
-                                        emotion_result = fer.top_emotion(face_region)
-                                        emotion = "Unknown"
-                                        confidence_pct = 0.0
-                                        
-                                        if emotion_result and isinstance(emotion_result, tuple) and len(emotion_result) == 2:
-                                            emotion_name, confidence_val = emotion_result
-                                            if isinstance(emotion_name, str):
-                                                emotion = emotion_name
-                                            if isinstance(confidence_val, (int, float)):
-                                                confidence_pct = float(confidence_val * 100)
-                                        
-                                        emotions_detected.append((emotion, confidence_pct))
-                                    except:
-                                        emotions_detected.append(("Unknown", 0.0))
-                            else:
-                                emotions_detected = [("Unknown", 0.0)] * len(face_objs)
-                        
-                        except Exception as e:
-                            logger.debug(f"Emotion detection error: {e}")
-                            emotions_detected = [("Unknown", 0)] * len(face_objs)
-                        
-                        # Draw boxes and emotions on frame
-                        for idx, face_obj in enumerate(face_objs):
+                        # Draw boxes on frame
+                        for face_obj in face_objs:
                             facial_area = face_obj.get('facial_area', {})
                             x = facial_area.get('x', 0)
                             y = facial_area.get('y', 0)
                             w = facial_area.get('w', 0)
                             h = facial_area.get('h', 0)
                             
-                            emotion, confidence_pct = emotions_detected[idx] if idx < len(emotions_detected) else ("Unknown", 0)
-                            color = (0, 255, 0) if emotion != "Unknown" else (0, 165, 255)  # Green or Orange
-                            
+                            color = (0, 255, 0) # Green box
                             cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
-                            
-                            if emotion != "Unknown":
-                                label = f"{emotion} ({confidence_pct:.0f}%)"
-                                cv2.putText(frame, label, (x, y - 15), 
-                                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-                            else:
-                                cv2.putText(frame, "Analyzing...", (x, y - 15),
-                                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
                         
                         # Update global data for real-time UI
                         latest_face_data['face_count'] = len(face_objs)
-                        latest_face_data['emotions'] = [e[0] for e in emotions_detected]
-                        latest_face_data['confidences'] = [e[1] for e in emotions_detected]
                         latest_face_data['last_update'] = datetime.now().isoformat()
                         
                     except Exception as e:
