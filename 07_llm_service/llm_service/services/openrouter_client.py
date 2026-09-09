@@ -168,7 +168,7 @@ class OpenRouterClient:
                 timeout=5,
                 headers={"Authorization": f"Bearer {self.api_key}"}
             )
-            return response.status_code < 500
+            return 200 <= response.status_code < 300
         except Exception as e:
             self.logger.debug(f"OpenRouter health check failed: {str(e)}")
             return False

@@ -149,7 +149,7 @@ class WakeWordService:
         logger.info(f"Power mode changed to: {mode}")
     
     def initialize_porcupine(self):
-        """Initialize Porcupine wake word engine, falling back to keyboard bypass on failure."""
+        """Initialize Porcupine, falling back to direct voice on failure."""
         try:
             self.porcupine = pvporcupine.create(
                 access_key=PORCUPINE_ACCESS_KEY,
@@ -159,20 +159,19 @@ class WakeWordService:
             self.using_keyboard = False
             logger.info("Porcupine initialized")
         except Exception as e:
-            logger.error(f"Porcupine init failed: {e}. Switching to keyboard bypass.")
+            logger.error(f"Porcupine init failed: {e}. Switching to direct voice.")
             self.porcupine = None
             self.using_keyboard = True
             if self.keyboard_listener is None:
                 self.keyboard_listener = KeyboardWakeWordListener(
                     callback=self._handle_wake_word_detected
                 )
-                self.keyboard_listener.start()
 
-    def _handle_wake_word_detected(self, keyword, confidence):
-        """Handle keyboard-triggered wake word."""
+    def _handle_wake_word_detected(self, audio_file, confidence):
+        """Forward the actual recording captured by the direct voice fallback."""
         if self.detection_callback:
-            logger.info(f"Wake word detected callback: keyword={keyword}, confidence={confidence}")
-            self.detection_callback("KeyboardTrigger.wav", confidence)
+            logger.info(f"Direct voice recording received: {audio_file}")
+            self.detection_callback(audio_file, confidence)
 
     def cleanup_porcupine(self):
         """Release Porcupine resources."""
@@ -289,11 +288,20 @@ class WakeWordService:
         """
         logger.info(f"Detection loop started - power_mode={self.power_mode}, VAD={'enabled' if self.vad else 'disabled'}")
         
-        # Keyboard bypass mode: no audio stream, keyboard listener drives callbacks
+        # The fallback listener owns microphone recording when Porcupine is unavailable.
         if self.using_keyboard or self.porcupine is None:
-            logger.info("Keyboard bypass mode active - waiting for keyboard wake word trigger")
-            while self.is_listening:
-                time.sleep(0.2)
+            logger.info("Direct voice fallback active")
+            listener = self.keyboard_listener
+            listener.start()
+            try:
+                while self.is_listening:
+                    if listener.error is not None:
+                        self.stats["errors"] += 1
+                        self.is_listening = False
+                        break
+                    time.sleep(0.2)
+            finally:
+                listener.stop()
             return
         
         try:
@@ -569,6 +577,9 @@ class WakeWordService:
         
         if not self.porcupine:
             self.initialize_porcupine()
+
+        if self.using_keyboard:
+            return await asyncio.to_thread(self.keyboard_listener.record_once)
         
         sample_rate = self.porcupine.sample_rate
         frame_length = self.porcupine.frame_length
@@ -654,6 +665,9 @@ class WakeWordService:
         
         if not self.porcupine:
             self.initialize_porcupine()
+
+        if self.using_keyboard:
+            return await asyncio.to_thread(self.keyboard_listener.record_once)
         
         sample_rate = self.porcupine.sample_rate
         frame_length = self.porcupine.frame_length

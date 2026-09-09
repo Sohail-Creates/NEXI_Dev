@@ -15,14 +15,18 @@ SERVICES = {
     "TTS Service": "http://localhost:8003/health",
     "TeachMe Service": "http://localhost:8004/health",
     "Enrollment Service": "http://localhost:8005/health",
+    "LLM Service": "http://localhost:8006/api/v1/health",
 }
 
 async def check_service_health(name: str, url: str, client: httpx.AsyncClient) -> bool:
     """Check if a service is running and healthy"""
     try:
-        resp = await client.get(url, timeout=3.0)
+        resp = await client.get(url, timeout=10.0)
         if resp.status_code == 200:
             data = resp.json()
+            if data.get("status") != "healthy":
+                print(f"  [FAIL] {name:25} - {data.get('status', 'unknown')}")
+                return False
             print(f"  [OK] {name:25} - {data.get('status', 'unknown')}")
             return True
         else:

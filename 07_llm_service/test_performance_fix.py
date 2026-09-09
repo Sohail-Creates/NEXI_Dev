@@ -51,6 +51,9 @@ async def test_response_times():
                 ) as resp:
                     elapsed = time.time() - start_time
                     result = await resp.json()
+                    assert resp.status == 200, result
+                    assert result['success'] is True and result['text'].strip(), result
+                    assert isinstance(result['metadata'], dict), result
                     
                     success = result.get("success", False)
                     
@@ -90,6 +93,7 @@ async def test_response_times():
             except Exception as e:
                 elapsed = time.time() - start_time
                 print(f"✗ FAILED: {str(e)} (elapsed: {elapsed:.2f}s)")
+                raise
             
             print()
     
@@ -110,3 +114,4 @@ if __name__ == "__main__":
         print("\n\nTest interrupted")
     except Exception as e:
         print(f"\n\nTest failed: {str(e)}")
+        raise

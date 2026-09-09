@@ -26,7 +26,6 @@ Resemblyzer==0.1.4
 sounddevice==0.5.5
 soundfile==0.13.1
 soxr==1.0.0
-webrtcvad-wheels @ file:///D:/Internship/TN_Team/Nexi_Robo/webrtcvad_wheels-2.0.14-cp311-cp311-win_amd64.whl#sha256=0d9ad6ef4ef7c89228469df52a4657886055a9f1ab036ede09400e2279ac5c70
 keyboard==0.13.5
 
 # ========== Web/API ==========

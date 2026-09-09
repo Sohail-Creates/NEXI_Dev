@@ -34,7 +34,7 @@ for SERVICE in "${SERVICE_LIST[@]}"; do
             URL="http://enrollment:8005/health"
             ;;
         llm)
-            URL="http://llm:8006/"
+            URL="http://llm:8006/api/v1/health"
             ;;
         *)
             echo "Unknown service: $SERVICE"

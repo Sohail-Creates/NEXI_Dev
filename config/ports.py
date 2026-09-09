@@ -86,6 +86,7 @@ class ServicePorts:
             "tts": f"http://{TTS_SERVICE_HOST}:{TTS_SERVICE_PORT}",
             "teachme": f"http://{TEACHME_SERVICE_HOST}:{TEACHME_SERVICE_PORT}",
             "enrollment": f"http://{ENROLLMENT_SERVICE_HOST}:{ENROLLMENT_SERVICE_PORT}",
+            "llm": f"http://{LLM_SERVICE_HOST}:{LLM_SERVICE_PORT}",
             "streamlit": f"http://{STREAMLIT_UI_HOST}:{STREAMLIT_UI_PORT}",
         }
         return service_map.get(service_name, f"http://{CENTRAL_SERVER_HOST}:{CENTRAL_SERVER_PORT}")

@@ -171,6 +171,10 @@ SERVICE_STATE = ServiceState()
 # ==========================
 # Registry Setup
 # ==========================
+class MissingPiperModelsError(RuntimeError):
+    """No configured Piper voice has both required model files."""
+
+
 def refresh_voice_registry():
     """Build voice registry without loading models (lazy loading on demand)."""
     global AVAILABLE_VOICES, VOICE_INDEX
@@ -200,7 +204,7 @@ def refresh_voice_registry():
         LOGGER.info("Registered voice: %s (lazy load enabled)", definition.id)
 
     if not discovered:
-        raise RuntimeError("No Piper models found!")
+        raise MissingPiperModelsError("No Piper models found!")
 
     AVAILABLE_VOICES = discovered
     VOICE_INDEX = registry
@@ -297,6 +301,11 @@ async def lifespan(app: FastAPI):
         SERVICE_READY = True
         LOGGER.info("TTS Service ready (3 independent worker caches, true parallelism, Jenny default voice)")
         
+    except MissingPiperModelsError as ex:
+        SERVICE_READY = False
+        AVAILABLE_VOICES.clear()
+        VOICE_INDEX.clear()
+        LOGGER.warning("TTS Service starting degraded: %s", ex)
     except Exception as ex:
         SERVICE_READY = False
         LOGGER.error("Failed to start TTS service: %s", str(ex), exc_info=True)
@@ -357,13 +366,11 @@ async def add_request_id(request: Request, call_next):
 def health_check():
     """
     Basic health check endpoint.
-    Returns 200 if service is running, ready to accept requests.
+    Reports process availability separately from synthesis readiness.
     """
-    if not SERVICE_READY:
-        raise HTTPException(status_code=503, detail="Service not ready")
-    
     return {
-        "status": "healthy",
+        "status": "healthy" if SERVICE_READY else "degraded",
+        "voice_model": "available" if SERVICE_READY else "unavailable",
         "service": Config.SERVICE_NAME,
         "version": Config.SERVICE_VERSION,
         "timestamp": time.time(),

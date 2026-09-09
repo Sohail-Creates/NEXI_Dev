@@ -231,7 +231,7 @@ class ServiceClient:
         """Quick health check for a service."""
         # Service-specific health endpoints
         health_paths = {
-            "llm": "/",
+            "llm": "/api/v1/health",
         }
         path = health_paths.get(service, "/health")
         

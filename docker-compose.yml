@@ -152,7 +152,7 @@ services:
     volumes:
       - ./logs:/app/logs
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8006/"]
+      test: ["CMD", "curl", "-f", "http://localhost:8006/api/v1/health"]
       interval: 10s
       timeout: 5s
       retries: 5

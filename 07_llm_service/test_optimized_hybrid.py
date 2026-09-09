@@ -32,19 +32,22 @@ async def test_hybrid_system():
         print("-" * 80)
         try:
             async with session.get(f"{SERVICE_URL}/health") as resp:
+                assert resp.status == 200, await resp.text()
                 data = await resp.json()
+                assert data['status'] == 'healthy' and data['openrouter'] is True, data
                 print(f"Status: {resp.status}")
                 print(f"Response: {json.dumps(data, indent=2)[:200]}")
                 print("✓ Service is responsive\n")
         except Exception as e:
             print(f"✗ Health check failed: {str(e)}\n")
-            return
+            raise
         
         # Test 2: Model info
         print("[2/4] Model Information")
         print("-" * 80)
         try:
             async with session.get(f"{SERVICE_URL}/model-info") as resp:
+                assert resp.status == 200, await resp.text()
                 info = await resp.json()
                 print(f"Model Loaded: {info.get('model_loaded', False)}")
                 print(f"Model Name: {info.get('model_name', 'unknown')}")
@@ -54,6 +57,7 @@ async def test_hybrid_system():
                 print("✓ Model info retrieved\n")
         except Exception as e:
             print(f"✗ Info check failed: {str(e)}\n")
+            raise
         
         # Test 3: Standard generation (OpenRouter if available, else fallback)
         print("[3/4] Standard Generation Test")
@@ -79,6 +83,9 @@ async def test_hybrid_system():
                 ) as resp:
                     elapsed = time.time() - start_time
                     data = await resp.json()
+                    assert resp.status == 200, data
+                    assert data['success'] is True and data['text'].strip(), data
+                    assert isinstance(data['metadata'], dict), data
                     
                     # Parse response
                     response_text = data.get("response", "")[:60]
@@ -115,14 +122,17 @@ async def test_hybrid_system():
         
         except asyncio.TimeoutError:
             print("✗ Request timed out")
+            raise
         except Exception as e:
             print(f"✗ Generation test failed: {str(e)}")
+            raise
         
         # Test 4: Final system status
         print("\n[4/4] System Status (After Generation)")
         print("-" * 80)
         try:
             async with session.get(f"{SERVICE_URL}/model-info") as resp:
+                assert resp.status == 200, await resp.text()
                 status = await resp.json()
                 print(f"OpenRouter Available: {status.get('openrouter_available', False)}")
                 print(f"In Fallback Mode: {status.get('in_fallback_mode', False)}")
@@ -136,6 +146,7 @@ async def test_hybrid_system():
                 print("\n✓ System status retrieved")
         except Exception as e:
             print(f"✗ Final status check failed: {str(e)}")
+            raise
     
     print("\n" + "=" * 80)
     print("TEST COMPLETE")
@@ -155,3 +166,4 @@ if __name__ == "__main__":
         print("\n\nTest interrupted by user")
     except Exception as e:
         print(f"\n\nTest failed: {str(e)}")
+        raise

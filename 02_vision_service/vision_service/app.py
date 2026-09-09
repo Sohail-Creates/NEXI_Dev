@@ -43,6 +43,7 @@ async def lifespan(app: FastAPI):
     Production implementation from Vision-Nexus
     """
     global _resource_pool
+    app.state.face_model_loaded = False
     
     # Startup
     logger.info("=" * 60)
@@ -76,6 +77,7 @@ async def lifespan(app: FastAPI):
                 max_retries=Config.MODEL_LOAD_MAX_RETRIES,
                 backoff_seconds=Config.MODEL_LOAD_BACKOFF_SECONDS
             )
+            app.state.face_model_loaded = bool(success)
             if not success:
                 logger.error("Failed to load embedding model - service may have limited functionality")
         except Exception as e:

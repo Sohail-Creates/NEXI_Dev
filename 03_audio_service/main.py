@@ -346,11 +346,32 @@ async def health_check():
         dict: Health status of the service
     """
     logger.info("Health check endpoint accessed")
+
+    from audio_service.config import STOP_WORD_CONFIG
+
+    stop_word_enabled = STOP_WORD_CONFIG.get("enabled", True)
+    stop_word_initialized = (
+        stop_word_detector is not None
+        and stop_word_detector.porcupine_instance is not None
+    )
+    stop_word_ready = (
+        stop_word_initialized
+        and stop_word_detector.is_running
+        and stop_word_detector.audio_stream is not None
+        and stop_word_detector.detection_thread is not None
+        and stop_word_detector.detection_thread.is_alive()
+    )
     
     health_status = {
-        "status": "healthy",
+        "status": "healthy" if not stop_word_enabled or stop_word_ready else "degraded",
         "service": "audio-service",
-        "version": API_CONFIG["version"]
+        "version": API_CONFIG["version"],
+        "stop_word_detector": {
+            "status": "disabled" if not stop_word_enabled else (
+                "available" if stop_word_ready else "unavailable"
+            ),
+            "initialized": stop_word_initialized,
+        },
     }
     
     # Add queue processor status if available (lightweight check only)

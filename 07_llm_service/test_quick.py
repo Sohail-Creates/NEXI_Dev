@@ -25,25 +25,29 @@ async def test_generation():
         print("-" * 40)
         try:
             async with session.get(f"{SERVICE_URL}/health") as resp:
+                assert resp.status == 200, await resp.text()
                 data = await resp.json()
+                assert data['status'] == 'healthy' and data['openrouter'] is True, data
                 print(f"✓ Service Status: {data.get('service', 'unknown')}")
                 print(f"✓ Model Loaded: {data.get('model_loaded', False)}")
                 print()
         except Exception as e:
             print(f"✗ Failed: {str(e)}\n")
-            return
+            raise
         
         # Test 2: Model info
         print("[Test 2] Model Information")
         print("-" * 40)
         try:
             async with session.get(f"{SERVICE_URL}/model-info") as resp:
+                assert resp.status == 200, await resp.text()
                 data = await resp.json()
                 print(f"✓ Model Name: {data.get('model_name', 'unknown')}")
                 print(f"✓ Device: {data.get('device ', 'unknown')}")
                 print()
         except Exception as e:
             print(f"✗ Failed: {str(e)}\n")
+            raise
         
         # Test 3: Generation with correct request format
         print("[Test 3] Text Generation (English)")
@@ -62,6 +66,9 @@ async def test_generation():
             ) as resp:
                 elapsed = time.time() - start
                 result = await resp.json()
+                assert resp.status == 200, result
+                assert result['success'] is True and result['text'].strip(), result
+                assert isinstance(result['metadata'], dict), result
                 
                 success = result.get("success", False)
                 print(f"Response time: {elapsed:.2f}s")
@@ -87,6 +94,7 @@ async def test_generation():
         
         except Exception as e:
             print(f"✗ Failed: {str(e)}\n")
+            raise
         
         # Test 4: Urdu generation
         print("[Test 4] Text Generation (Urdu)")
@@ -105,6 +113,9 @@ async def test_generation():
             ) as resp:
                 elapsed = time.time() - start
                 result = await resp.json()
+                assert resp.status == 200, result
+                assert result['success'] is True and result['text'].strip(), result
+                assert isinstance(result['metadata'], dict), result
                 
                 success = result.get("success", False)
                 print(f"Response time: {elapsed:.2f}s")
@@ -125,6 +136,7 @@ async def test_generation():
         
         except Exception as e:
             print(f"✗ Failed: {str(e)}\n")
+            raise
     
     print("=" * 80)
     print("TEST COMPLETE")
@@ -144,3 +156,4 @@ if __name__ == "__main__":
         print("\n\nTest interrupted")
     except Exception as e:
         print(f"\n\nTest failed: {str(e)}")
+        raise

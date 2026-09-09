@@ -4,9 +4,10 @@ From Vision-Nexus
 """
 
 import cv2
+import asyncio
 import logging
 from datetime import datetime
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from ..models import HealthCheckResponse, ServiceHealthResponse, FaceDataResponse
 from ..config import Config
@@ -41,26 +42,23 @@ async def health_check_root():
 
 
 @router.get("/health", response_model=HealthCheckResponse)
-async def health_check_detailed():
+async def health_check_detailed(request: Request):
     """
     Detailed health check endpoint
-    Returns status of camera, emotion detection, and other resources
-    From Vision-Nexus
-    
-    NOTE: This is a QUICK status check - does NOT attempt to acquire resources
-    to avoid blocking on camera/model access. Use /detect/faces for actual capability check.
+    Report the model initialization result and actual camera availability.
     """
     if _resource_pool is None:
-        raise HTTPException(status_code=500, detail="Resource pool not initialized")
+        raise HTTPException(status_code=503, detail="Resource pool not initialized")
     
-    # Quick status - don't try to access camera (that blocks!)
-    # Camera is checked on first request when needed
-    camera_status = "available"  # Assume available, will fail gracefully if not
+    camera_available = await asyncio.to_thread(_resource_pool.is_camera_available)
+    camera_status = "available" if camera_available else "unavailable"
+    face_model_loaded = getattr(request.app.state, "face_model_loaded", False)
     emotion_status = "disabled"
     
     return HealthCheckResponse(
-        status="healthy",  # Service is running and ready
+        status="healthy" if camera_available and face_model_loaded else "degraded",
         camera=camera_status,
+        face_model="loaded" if face_model_loaded else "unavailable",
         opencv_version=cv2.__version__,
         emotion_detection=emotion_status,
         timestamp=datetime.utcnow().isoformat()

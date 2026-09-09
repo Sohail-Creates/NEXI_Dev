@@ -19,8 +19,8 @@ class CorrelationIDFilter(logging.Filter):
     """Add trace ID to all log records"""
     
     def filter(self, record: logging.LogRecord) -> bool:
-        trace_id = trace_context.get()
-        record.trace_id = trace_id or 'no-trace'
+        if not getattr(record, 'trace_id', None):
+            record.trace_id = trace_context.get() or str(uuid.uuid4())[:8]
         return True
 
 
@@ -78,6 +78,7 @@ def setup_logging(level: str = 'INFO'):
     )
     
     handler = logging.StreamHandler()
+    handler.addFilter(CorrelationIDFilter())
     handler.setFormatter(formatter)
     
     root = logging.getLogger()

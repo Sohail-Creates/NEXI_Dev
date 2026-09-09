@@ -5,6 +5,7 @@ ALL PORT CONFIGURATION MUST USE config.ports.ServicePorts
 """
 
 from typing import Optional
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 from config.ports import ServicePorts
@@ -18,6 +19,14 @@ class Settings(BaseSettings):
     debug: bool = True
     project_name: str = "Nexi Robo"
     project_version: str = "1.0.0"
+
+    @field_validator("debug", mode="before")
+    @classmethod
+    def parse_debug(cls, value):
+        """Accept the inherited release mode as disabled debug logging."""
+        if isinstance(value, str) and value.strip().lower() == "release":
+            return False
+        return value
 
     # =============== CENTRALIZED PORT CONFIGURATION ===============
     # NOTE: All ports are defined in config/ports.py

@@ -39,7 +39,6 @@ class ServiceClientFactory:
                 base_url=settings.audio_service_url,
                 timeout=settings.audio_service_timeout,
                 max_retries=settings.audio_service_max_retries,
-                circuit_breaker_enabled=settings.enable_circuit_breaker,
             )
         return self._clients["audio"]
 

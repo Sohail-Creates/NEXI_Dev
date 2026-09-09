@@ -44,6 +44,7 @@ def create_generation_routes(openrouter_client):
     
     @router.get("/health")
     async def health():
-        return {"status": "healthy", "openrouter": openrouter_client.is_healthy()}
+        healthy = openrouter_client.is_healthy()
+        return {"status": "healthy" if healthy else "degraded", "openrouter": healthy}
     
     return router

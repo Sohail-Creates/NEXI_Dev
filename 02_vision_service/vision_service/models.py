@@ -62,6 +62,7 @@ class ServiceHealthResponse(BaseModel):
 class HealthCheckResponse(BaseModel):
     status: str
     camera: str
+    face_model: str
     opencv_version: str
     emotion_detection: str
     timestamp: str

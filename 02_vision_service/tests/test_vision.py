@@ -24,15 +24,20 @@ def test_health():
     """Test /health endpoint"""
     try:
         response = requests.get(f"{BASE_URL}/health", timeout=5)
+        assert response.status_code == 200, response.text
         if response.status_code == 200:
             data = response.json()
+            assert data['camera'] in ('available', 'unavailable'), data
+            assert data['face_model'] in ('loaded', 'unavailable'), data
+            expected = 'healthy' if data['camera'] == 'available' and data['face_model'] == 'loaded' else 'degraded'
+            assert data['status'] == expected, data
             print_result(f"Health Check: {data['status']}", "PASS")
             print(f"  - Camera: {data.get('camera', 'unknown')}")
             print(f"  - Emotions: {data.get('emotion_detection', 'unknown')}")
             return True
     except Exception as e:
         print_result(f"Health Check Failed: {str(e)[:50]}", "FAIL")
-        return False
+        raise
     return False
 
 def test_face_detection():
@@ -43,14 +48,17 @@ def test_face_detection():
             params={"detector_backend": "opencv", "model_name": "Facenet"},
             timeout=TIMEOUT
         )
+        assert response.status_code == 200, response.text
         if response.status_code == 200:
             data = response.json()
+            assert data['status'] == 'success', data
+            assert data['faces_detected'] == len(data['faces']), data
             faces = data.get('faces_detected', 0)
             print_result(f"Face Detection: {faces} face(s) detected", "PASS")
             return True
     except Exception as e:
         print_result(f"Face Detection Failed: {str(e)[:50]}", "FAIL")
-        return False
+        raise
     return False
 
 def test_emotions_all_7():
@@ -61,8 +69,12 @@ def test_emotions_all_7():
             params={"detector_backend": "opencv", "analyze_emotions": True},
             timeout=TIMEOUT
         )
+        assert response.status_code == 200, response.text
         if response.status_code == 200:
             data = response.json()
+            assert data['status'] == 'success', data
+            assert data['faces_detected'] > 0, 'Emotion test requires a detected face'
+            assert all(face.get('emotion_scores') for face in data['faces']), data
             faces = data.get('faces_detected', 0)
             print_result(f"Emotion Detection: {faces} face(s) detected", "PASS")
             
@@ -83,7 +95,7 @@ def test_emotions_all_7():
             return True
     except Exception as e:
         print_result(f"Emotion Detection Failed: {str(e)[:50]}", "FAIL")
-        return False
+        raise
     return False
 
 def test_camera_controls():
@@ -91,42 +103,46 @@ def test_camera_controls():
     try:
         # Test pause
         response = requests.post(f"{BASE_URL}/camera/pause", timeout=5)
+        assert response.status_code == 200, response.text
         data = response.json()
         status = data.get('status', '')
         
         if status != 'paused':
             print_result(f"Camera Controls: Pause Failed (got {status})", "FAIL")
-            return False
+            raise AssertionError(f"Expected paused, got {status!r}")
         
         time.sleep(0.5)
         
         # Test resume
         response = requests.post(f"{BASE_URL}/camera/resume", timeout=5)
+        assert response.status_code == 200, response.text
         data = response.json()
         status = data.get('status', '')
         
         # Accept both 'resumed' and 'active' as valid states
         if status not in ['resumed', 'active']:
             print_result(f"Camera Controls: Resume Failed (got {status})", "FAIL")
-            return False
+            raise AssertionError(f"Expected resumed or active, got {status!r}")
         
         print_result(f"Camera Controls: Pause/Resume Working", "PASS")
         return True
         
     except Exception as e:
         print_result(f"Camera Controls Failed: {str(e)[:50]}", "FAIL")
-        return False
+        raise
 
 def test_live_ui():
     """Test /live endpoint"""
     try:
         response = requests.get(f"{BASE_URL}/live", timeout=5)
+        assert response.status_code == 200, response.text
+        assert "html" in response.text.lower(), 'Expected HTML live UI'
         if response.status_code == 200 and "html" in response.text.lower():
             print_result(f"Live UI Endpoint: Available", "PASS")
             return True
     except Exception as e:
         print_result(f"Live UI Failed: {str(e)[:50]}", "FAIL")
-        return False
+        raise
     return False
 
 def run_all_tests():
