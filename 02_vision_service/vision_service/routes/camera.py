@@ -33,12 +33,11 @@ async def pause_camera():
         raise HTTPException(status_code=500, detail="Resource pool not initialized")
     
     try:
+        response = CameraStateResponse(status="paused", message="Camera paused")
         _camera_paused = True
         logger.info("Camera paused")
         
-        return CameraStateResponse(
-            status="paused"
-        )
+        return response
     except Exception as e:
         logger.error(f"Error pausing camera: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to pause camera: {str(e)}")
@@ -53,12 +52,11 @@ async def resume_camera():
         raise HTTPException(status_code=500, detail="Resource pool not initialized")
     
     try:
+        response = CameraStateResponse(status="active", message="Camera resumed")
         _camera_paused = False
         logger.info("Camera resumed")
         
-        return CameraStateResponse(
-            status="active"
-        )
+        return response
     except Exception as e:
         logger.error(f"Error resuming camera: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to resume camera: {str(e)}")

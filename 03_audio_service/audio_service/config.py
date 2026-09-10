@@ -319,8 +319,13 @@ VAD_RECORDER_CONFIG["output_directory"].mkdir(parents=True, exist_ok=True)
 # ============================================================================
 # CONVERSATION STATE CONFIGURATION (NEW)
 # ============================================================================
+_SESSION_SILENCE_TIMEOUT_SECONDS = float(
+    os.getenv("CONVERSATION_SILENCE_TIMEOUT_SECONDS", "10")
+)
+
 CONVERSATION_CONFIG = {
-    "timeout_seconds": int(os.getenv("CONVERSATION_TIMEOUT_SECONDS", 120)),
+    # One source of truth for the product's continuous-silence session timeout.
+    "timeout_seconds": _SESSION_SILENCE_TIMEOUT_SECONDS,
     "enable_continuous_mode": os.getenv("CONVERSATION_CONTINUOUS_MODE", "true").lower() == "true",
-    "max_consecutive_silence": int(os.getenv("CONVERSATION_MAX_SILENCE_SEC", 120))
+    "max_consecutive_silence": _SESSION_SILENCE_TIMEOUT_SECONDS,
 }

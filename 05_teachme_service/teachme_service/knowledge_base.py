@@ -8,6 +8,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 import contextlib
+import threading
+from .sqlite_store import KnowledgeStore, locked
 
 # Safe file locking (cross-platform)
 from .safe_file_lock import get_safe_file_lock, FileLockError
@@ -30,6 +32,9 @@ logger = logging.getLogger(__name__)
 class PersistentKnowledgeBase:
     def __init__(self, storage_file: Optional[str] = None):
         self.storage_file = storage_file or storage_config.STORAGE_FILE
+        self._storage_lock = threading.RLock()
+        self._store = KnowledgeStore(Path(self.storage_file).with_suffix(".sqlite3"))
+        self._baseline = {}
         self.backup_dir = storage_config.BACKUP_DIR
         self.backup_retention = storage_config.BACKUP_RETENTION
         
@@ -60,6 +65,7 @@ class PersistentKnowledgeBase:
         logger.info(f"KnowledgeBase initialized with {len(self._storage)} items")
     
     @property
+    @locked
     def objects(self) -> Dict[str, KnowledgeItem]:
         """Computed property: returns all objects without storage duplication"""
         return {
@@ -68,6 +74,7 @@ class PersistentKnowledgeBase:
         }
     
     @property
+    @locked
     def facts(self) -> Dict[str, KnowledgeItem]:
         """Computed property: returns all facts without storage duplication"""
         return {
@@ -98,125 +105,22 @@ class PersistentKnowledgeBase:
             raise
     
     def create_backup(self) -> Optional[str]:
-        """Create a backup of current data"""
-        try:
-            if os.path.exists(self.storage_file):
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                backup_file = os.path.join(self.backup_dir, f"backup_{timestamp}.json")
-                
-                with open(self.storage_file, 'r', encoding='utf-8') as source:
-                    data = json.load(source)
-                
-                with open(backup_file, 'w', encoding='utf-8') as target:
-                    json.dump(data, target, indent=2)
-                
-                logger.debug(f"Created backup: {backup_file}")
-                return backup_file
-        except Exception as e:
-            logger.warning(f"Backup creation failed: {e}")
-        return None
+        backup = str(Path(self.backup_dir) / ("knowledge_" + uuid.uuid4().hex + ".sqlite3"))
+        self._store.backup(backup)
+        return backup
     
     async def create_backup_async(self) -> Optional[str]:
-        """Async backup creation (doesn't block)"""
-        if not performance_config.ASYNC_BACKUP_ENABLED:
-            return self.create_backup()
-        
-        try:
-            if aiofiles and os.path.exists(self.storage_file):
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                backup_file = os.path.join(self.backup_dir, f"backup_{timestamp}.json")
-                
-                async with aiofiles.open(self.storage_file, 'r', encoding='utf-8') as source:
-                    data = await source.read()
-                
-                async with aiofiles.open(backup_file, 'w', encoding='utf-8') as target:
-                    await target.write(data)
-                
-                logger.debug(f"Created async backup: {backup_file}")
-                return backup_file
-        except Exception as e:
-            logger.warning(f"Async backup failed: {e}")
-        
-        return None
+        return await asyncio.to_thread(self.create_backup)
     
+    @locked
     def load_from_file(self):
-        """Load knowledge from JSON file (thread-safe)"""
-        if os.path.exists(self.storage_file):
-            try:
-                with self._file_lock_context():
-                    logger.info(f"Loading from {self.storage_file}...")
-                    with open(self.storage_file, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                    
-                    loaded_count = 0
-                    for item_id, item_data in data.get('storage', {}).items():
-                        try:
-                            # Convert string dates back to datetime
-                            if 'created_at' in item_data and isinstance(item_data['created_at'], str):
-                                item_data['created_at'] = datetime.fromisoformat(item_data['created_at'].replace('Z', '+00:00'))
-                            if 'updated_at' in item_data and isinstance(item_data['updated_at'], str):
-                                item_data['updated_at'] = datetime.fromisoformat(item_data['updated_at'].replace('Z', '+00:00'))
-                            
-                            # Recreate KnowledgeItem
-                            knowledge_item = KnowledgeItem(**item_data)
-                            self._storage[item_id] = knowledge_item
-                            loaded_count += 1
-                            
-                        except Exception as e:
-                            logger.warning(f"Failed to load item {item_id}: {e}")
-                    
-                    logger.info(f"Loaded {loaded_count} items from storage")
-                    
-                    # Rebuild embedding index with loaded data
-                    self._rebuild_embedding_index()
-                    
-            except json.JSONDecodeError as e:
-                logger.error(f"Invalid JSON in {self.storage_file}: {e}")
-                # Create backup of corrupted file
-                corrupted_backup = os.path.join(self.backup_dir, f"corrupted_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
-                if os.path.exists(self.storage_file):
-                    os.rename(self.storage_file, corrupted_backup)
-                    logger.warning(f"Moved corrupted file to: {corrupted_backup}")
-                self._initialize_empty_file()
-                
-            except Exception as e:
-                logger.error(f"Error loading from file: {e}")
-                self._storage = {}
-                
-        else:
-            logger.info(f"No existing data file. Creating new: {self.storage_file}")
-            self._initialize_empty_file()
+        data = self._store.read()
+        self._storage = {key: KnowledgeItem.model_validate(record) for key, record in data['storage'].items()}
+        self._baseline = data["storage"]
+        self._rebuild_embedding_index()
     
     async def load_from_file_async(self):
-        """Async version of load_from_file"""
-        if not aiofiles or not performance_config.ASYNC_SAVE_ENABLED:
-            self.load_from_file()
-            return
-        
-        if os.path.exists(self.storage_file):
-            try:
-                async with aiofiles.open(self.storage_file, 'r', encoding='utf-8') as f:
-                    content = await f.read()
-                    data = json.loads(content)
-                    
-                    loaded_count = 0
-                    for item_id, item_data in data.get('storage', {}).items():
-                        try:
-                            if 'created_at' in item_data and isinstance(item_data['created_at'], str):
-                                item_data['created_at'] = datetime.fromisoformat(item_data['created_at'].replace('Z', '+00:00'))
-                            if 'updated_at' in item_data and isinstance(item_data['updated_at'], str):
-                                item_data['updated_at'] = datetime.fromisoformat(item_data['updated_at'].replace('Z', '+00:00'))
-                            
-                            knowledge_item = KnowledgeItem(**item_data)
-                            self._storage[item_id] = knowledge_item
-                            loaded_count += 1
-                        except Exception as e:
-                            logger.warning(f"Failed to async load item {item_id}: {e}")
-                    
-                    logger.info(f"Async loaded {loaded_count} items")
-            except Exception as e:
-                logger.error(f"Error in async load: {e}")
-                self.load_from_file()  # Fallback to sync
+        await asyncio.to_thread(self.load_from_file)
     
     def _rebuild_embedding_index(self):
         """
@@ -242,117 +146,22 @@ class PersistentKnowledgeBase:
             logger.error(f"Error rebuilding embedding index: {e}")
     
     def _initialize_empty_file(self):
-        """Initialize an empty JSON file"""
-        try:
-            empty_data = {
-                'storage': {},
-                'metadata': {
-                    'created_at': datetime.now().isoformat(),
-                    'version': '1.0',
-                    'total_items': 0
-                }
-            }
-            
-            with open(self.storage_file, 'w', encoding='utf-8') as f:
-                json.dump(empty_data, f, indent=2)
-            
-            print(f" Created new storage file: {self.storage_file}")
-            
-        except Exception as e:
-            print(f" Failed to create storage file: {e}")
+        raise RuntimeError("Run the explicit SQLite migration; implicit empty-store creation is disabled")
     
+    @locked
     def save_to_file(self):
-        """Save knowledge to JSON file (thread-safe, blocking)"""
-        try:
-            with self._file_lock_context():
-                logger.info(f"Saving {len(self._storage)} items to {self.storage_file}...")
-                
-                # Create backup before saving
-                self.create_backup()
-                
-                # Prepare data with metadata
-                data = {
-                    'storage': {
-                        item_id: item.dict() 
-                        for item_id, item in self._storage.items()
-                    },
-                    'metadata': {
-                        'last_saved': datetime.now().isoformat(),
-                        'total_items': len(self._storage),
-                        'objects_count': len(self.objects),
-                        'facts_count': len(self.facts),
-                        'version': '1.0'
-                    }
-                }
-                
-                # Atomic write: write to temporary file first
-                temp_file = self.storage_file + '.tmp'
-                with open(temp_file, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, indent=2, ensure_ascii=False)
-                
-                # Replace original file
-                os.replace(temp_file, self.storage_file)
-                
-                logger.info(f"Saved {len(self._storage)} items to {self.storage_file}")
-            
-        except Exception as e:
-            logger.error(f"Error saving to file: {e}")
-            # Clean up temp file if it exists
-            temp_file = self.storage_file + '.tmp'
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
-            raise
+        proposed = {key: item.model_dump(mode="json") for key, item in self._storage.items()}
+        metadata = {'last_saved': datetime.now().isoformat(), 'version': '1.0'}
+        merged = self._store.save(self._baseline, proposed, metadata)
+        self._storage = {key: KnowledgeItem.model_validate(record) for key, record in merged.items()}
+        self._baseline = merged
     
     async def save_to_file_async(self):
-        """Save knowledge to JSON file using async I/O (non-blocking)"""
-        if not aiofiles or not performance_config.ASYNC_SAVE_ENABLED:
-            # Fallback to sync version
-            self.save_to_file()
-            return
-        
-        try:
-            logger.info(f"Async saving {len(self._storage)} items...")
-            
-            # Create backup (sync, fast)
-            await asyncio.to_thread(self.create_backup)
-            
-            # Prepare data (sync, fast)
-            data = {
-                'storage': {
-                    item_id: item.dict() 
-                    for item_id, item in self._storage.items()
-                },
-                'metadata': {
-                    'last_saved': datetime.now().isoformat(),
-                    'total_items': len(self._storage),
-                    'objects_count': len(self.objects),
-                    'facts_count': len(self.facts),
-                    'version': '1.0'
-                }
-            }
-            
-            # Async write
-            temp_file = self.storage_file + '.tmp'
-            content = json.dumps(data, indent=2, ensure_ascii=False)
-            
-            async with aiofiles.open(temp_file, 'w', encoding='utf-8') as f:
-                await f.write(content)
-            
-            # Atomic rename (sync, fast)
-            os.replace(temp_file, self.storage_file)
-            
-            logger.info(f"Async saved {len(self._storage)} items")
-            
-        except Exception as e:
-            logger.error(f"Error in async save: {e}")
-            temp_file = self.storage_file + '.tmp'
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
-            # Fallback to sync save
-            self.save_to_file()
+        await asyncio.to_thread(self.save_to_file)
     
     # === Core CRUD Operations ===
     
+    @locked
     def learn_object(self, object_data: ObjectData, tags: List[str] = None, confidence: float = 1.0, embedding: Optional[List[float]] = None, skip_save: bool = False) -> str:
         """Learn a new object with persistence"""
         item_id = str(uuid.uuid4())
@@ -381,6 +190,7 @@ class PersistentKnowledgeBase:
         logger.info(f"Learned object: {object_data.name} (ID: {item_id}, embedding: {embedding is not None})")
         return item_id
     
+    @locked
     def learn_fact(self, fact_data: FactData, tags: List[str] = None, confidence: float = 1.0, embedding: Optional[List[float]] = None, skip_save: bool = False) -> str:
         """Learn a new fact with persistence"""
         item_id = str(uuid.uuid4())
@@ -409,18 +219,22 @@ class PersistentKnowledgeBase:
         logger.info(f"Learned fact: {fact_data.subject} {fact_data.predicate} {fact_data.object} (ID: {item_id}, embedding: {embedding is not None})")
         return item_id
     
+    @locked
     def get_item(self, item_id: str) -> Optional[KnowledgeItem]:
         """Get item by ID"""
         return self._storage.get(item_id)
     
+    @locked
     def get_object(self, object_id: str) -> Optional[KnowledgeItem]:
         """Get object by ID"""
         return self.objects.get(object_id)
     
+    @locked
     def get_fact(self, fact_id: str) -> Optional[KnowledgeItem]:
         """Get fact by ID"""
         return self.facts.get(fact_id)
     
+    @locked
     def update_item(self, item_id: str, **kwargs) -> Optional[KnowledgeItem]:
         """Update an existing item"""
         if item_id not in self._storage:
@@ -437,6 +251,7 @@ class PersistentKnowledgeBase:
         self.save_to_file()
         return item
     
+    @locked
     def forget_item(self, item_id: str, permanent: bool = False, skip_save: bool = False) -> bool:
         """Forget item with persistence"""
         if item_id not in self._storage:
@@ -455,6 +270,7 @@ class PersistentKnowledgeBase:
         logger.info(f"Forgot item: {item_id} (permanent={permanent})")
         return True
     
+    @locked
     def restore_item(self, item_id: str) -> bool:
         """Restore a soft-deleted item"""
         if item_id not in self._deleted_items:
@@ -469,18 +285,23 @@ class PersistentKnowledgeBase:
     
     # === Query Operations ===
     
+    @locked
     def get_all_objects(self) -> List[KnowledgeItem]:
         return list(self.objects.values())
     
+    @locked
     def get_all_facts(self) -> List[KnowledgeItem]:
         return list(self.facts.values())
     
+    @locked
     def get_all_items(self) -> List[KnowledgeItem]:
         return list(self._storage.values())
     
+    @locked
     def get_deleted_items(self) -> List[KnowledgeItem]:
         return list(self._deleted_items.values())
     
+    @locked
     def search_by_name(self, name: str) -> List[KnowledgeItem]:
         """Search items by name (for objects) or subject (for facts)"""
         results = []
@@ -498,6 +319,7 @@ class PersistentKnowledgeBase:
         
         return results
     
+    @locked
     def search_by_tag(self, tag: str) -> List[KnowledgeItem]:
         """Search items by tag"""
         tag_lower = tag.lower()
@@ -506,6 +328,7 @@ class PersistentKnowledgeBase:
             if any(t.lower() == tag_lower for t in item.tags)
         ]
     
+    @locked
     def search_objects_by_category(self, category: str) -> List[KnowledgeItem]:
         """Search objects by category"""
         category_lower = category.lower()
@@ -516,6 +339,7 @@ class PersistentKnowledgeBase:
                category_lower in item.data.category.lower()
         ]
     
+    @locked
     def get_facts_by_subject(self, subject: str) -> List[KnowledgeItem]:
         """Get all facts about a specific subject"""
         subject_lower = subject.lower()
@@ -525,6 +349,7 @@ class PersistentKnowledgeBase:
                subject_lower in fact.data.subject.lower()
         ]
     
+    @locked
     def search_by_embedding(self, embedding: List[float], k: int = 5, threshold: float = 0.3, item_type: Optional[LearningType] = None) -> List[Tuple[KnowledgeItem, float]]:
         """
         Search for similar items using embedding vectors (Phase 2 optimization).
@@ -570,6 +395,7 @@ class PersistentKnowledgeBase:
     
     # === Statistics & Metrics ===
     
+    @locked
     def get_items_count(self) -> dict:
         """Get detailed statistics"""
         categories = {}
@@ -591,6 +417,7 @@ class PersistentKnowledgeBase:
             "embedding_index": embedding_stats
         }
     
+    @locked
     def get_category_stats(self) -> Dict[str, int]:
         """Get statistics by category"""
         stats = {}
@@ -602,6 +429,7 @@ class PersistentKnowledgeBase:
     
     # === Data Management ===
     
+    @locked
     def export_data(self, export_file: str = "knowledge_export.json") -> bool:
         """Export all data to a portable JSON file"""
         try:
@@ -630,6 +458,7 @@ class PersistentKnowledgeBase:
             logger.error(f"Error exporting data: {e}")
             return False
     
+    @locked
     def import_data(self, import_file: str) -> bool:
         """Import data from exported JSON file"""
         try:
@@ -690,6 +519,7 @@ class PersistentKnowledgeBase:
             logger.error(f"Error importing data: {e}")
             return False
     
+    @locked
     def clear_all_data(self) -> bool:
         """Clear all data (use with caution)"""
         confirm = input("Are you sure you want to clear ALL data? (yes/no): ")

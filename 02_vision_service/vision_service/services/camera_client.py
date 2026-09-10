@@ -1,158 +1,72 @@
-"""
-Camera Resource Client for Vision Service
-Communicates with Central Server's camera manager (optional)
-Prevents resource conflicts if Central Server is running
-Gracefully falls back to direct access if not available
-"""
-
-import requests
+"""Fail-closed client of Central's acknowledged resource leases."""
 import logging
-import time
-from typing import Optional, Dict
+import requests
+import os
+import psutil
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-
 class CameraResourceClient:
-    """Client for requesting camera access from Central Server (optional)"""
-    
-    def __init__(self, central_server_url: str = "http://localhost:8000", 
-                 service_name: str = "vision_service"):
-        """
-        Initialize camera resource client
-        
-        Args:
-            central_server_url: URL of Central Server
-            service_name: Name of this service
-        """
-        self.central_server_url = central_server_url
+    def __init__(self, central_server_url="http://localhost:8000", service_name="vision_service"):
+        self.central_server_url = central_server_url.rstrip("/")
         self.service_name = service_name
         self.camera_granted = False
-        self._central_available = None  # Cache to avoid repeated checks
-        
-        logger.debug(f"Camera Resource Client initialized "
-                    f"(optional, fallback available)")
-    
-    def _is_central_server_available(self, timeout: int = 2) -> bool:
-        """
-        Check if Central Server is running (cached for 60s)
-        Doesn't fail, just returns status
-        """
-        if self._central_available is not None:
-            return self._central_available
-            
+        self.lease_id = None
+
+    def request_camera(self, timeout=5, max_retries=3):
+        if self.lease_id is not None:
+            # A failed previous release must be acknowledged before a new request.
+            if not self.release_camera(timeout):
+                return False
         try:
-            response = requests.get(
-                f"{self.central_server_url}/health",
-                timeout=timeout
-            )
-            self._central_available = (response.status_code == 200)
-            return self._central_available
-        except:
-            self._central_available = False
-            return False
-    
-    def request_camera(self, timeout: int = 5, max_retries: int = 3) -> bool:
-        """
-        Request camera access from Central Server
-        OPTIONAL - fails gracefully if Central Server not available
-        
-        Args:
-            timeout: Request timeout in seconds
-            max_retries: Max retry attempts if camera is busy
-            
-        Returns:
-            True if camera granted (or Central Server unavailable), False if denied
-        """
-        if self.camera_granted:
-            logger.debug(f"Camera already granted to {self.service_name}")
-            return True
-        
-        # Check if Central Server is available
-        if not self._is_central_server_available():
-            logger.debug("Central Server not available - using direct camera access (fallback)")
-            self.camera_granted = True  # Assume granted in fallback mode
-            return True
-        
-        # Try to request camera (but don't retry endlessly)
-        for attempt in range(max_retries):
-            try:
-                response = requests.post(
-                    f"{self.central_server_url}/camera/request",
-                    json={
-                        "service_name": self.service_name,
-                        "timeout": timeout
-                    },
-                    timeout=timeout
-                )
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    
-                    if data.get("status") == "granted":
-                        self.camera_granted = True
-                        logger.info(f" Camera GRANTED to {self.service_name}")
-                        return True
-                    
-                    elif data.get("status") == "denied":
-                        held_by = data.get("held_by", "unknown")
-                        logger.info(f"Camera held by {held_by}, waiting...")
-                        
-                        # Brief wait before retry
-                        if attempt < max_retries - 1:
-                            time.sleep(0.5)
-                        continue
-                
-                else:
-                    logger.debug(f"Camera request status {response.status_code}")
-                    time.sleep(0.5)
-                    continue
-            
-            except requests.ConnectionError:
-                logger.debug("Cannot reach Central Server (fallback to direct access)")
-                self.camera_granted = True
-                return True
-            
-            except Exception as e:
-                logger.debug(f"Camera request: {e}")
-                time.sleep(0.5)
-        
-        # Failed to get camera from Central Server, allow direct access as fallback
-        logger.info("Camera resource unavailable from Central Server - using direct access")
-        self.camera_granted = True
-        return True
-    
-    def release_camera(self, timeout: int = 5) -> bool:
-        """
-        Release camera back to Central Server
-        Returns: True if released or fallback mode
-        """
-        if not self.camera_granted:
-            return True
-        
-        # Only try to release if we know Central Server is available
-        if not self._is_central_server_available():
+            response = requests.post(self.central_server_url + "/resources/request",
+                params={"resource_type": "camera", "service_name": self.service_name,
+                        "priority": "BACKGROUND", "timeout_seconds": timeout,
+                        "holder_pid": os.getpid(), "holder_started": psutil.Process().create_time(),
+                        "holder_port": int(os.getenv("VISION_PORT", "8001"))}, timeout=timeout)
+            response.raise_for_status()
+            data = response.json()
+            self.lease_id = data.get("lease_id")
+            if data.get("state") != "reserved" or not self.lease_id:
+                self.release_camera(timeout)
+                return False
+            response = requests.post(self.central_server_url + "/resources/acknowledge/" + self.lease_id,
+                                     timeout=timeout)
+            response.raise_for_status()
+            data = response.json()
+            self.camera_granted = data.get("granted") is True and data.get("lease_id") == self.lease_id
+            if not self.camera_granted:
+                self.release_camera(timeout)
+            return self.camera_granted
+        except (requests.RequestException, ValueError, TypeError) as exc:
+            logger.warning("Camera authority unavailable or denied grant: %s", exc)
             self.camera_granted = False
-            logger.debug("Camera released (fallback mode)")
+            return False
+
+    def release_camera(self, timeout=5, lease_id=None, forced=False):
+        lease_id = lease_id or self.lease_id
+        if lease_id == self.lease_id:
+            self.camera_granted = False
+        if lease_id is None:
             return True
-        
         try:
-            response = requests.post(
-                f"{self.central_server_url}/camera/release",
-                json={"service_name": self.service_name},
-                timeout=timeout
-            )
-            
-            if response.status_code == 200:
-                self.camera_granted = False
-                logger.debug("Camera released to Central Server")
+            response = requests.post(self.central_server_url + "/resources/release/" + lease_id,
+                                     params={"forced": forced}, timeout=timeout)
+            if response.status_code == 404 or (response.status_code == 200 and response.json().get("success") is True):
+                if self.lease_id == lease_id:
+                    self.lease_id = None
                 return True
-        
-        except Exception as e:
-            logger.debug(f"Error releasing camera: {e}")
-        
-        self.camera_granted = False
-        return True
+        except (requests.RequestException, ValueError) as exc:
+            logger.warning("Camera release acknowledgement failed: %s", exc)
+        return False
+
+    def lease_active(self, lease_id, timeout=1):
+        try:
+            response = requests.get(self.central_server_url + "/resources/status/" + lease_id, timeout=timeout)
+            return response.status_code == 200 and response.json().get("lease", {}).get("state") == "active"
+        except (requests.RequestException, ValueError):
+            return False
 
 
 # Global instance

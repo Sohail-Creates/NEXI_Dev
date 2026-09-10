@@ -209,6 +209,8 @@ class EnrollmentService:
             enrollment_record = {
                 "user_id": user_id,
                 "user_name": user_name,
+                "face_embeddings": face_embeddings,
+                "voice_embeddings": voice_embeddings,
                 "age": age,
                 "relation": relation,
                 "avg_face_confidence": avg_face_confidence,
@@ -565,7 +567,7 @@ class EnrollmentService:
         if not user_ids:
             return {"total": 0, "synced": 0, "skipped": 0, "errors": 0}
 
-        results: Dict[str, int] = {"total": len(user_ids), "synced": 0, "skipped": 0, "errors": 0}
+        results = {"total": len(user_ids), "synced": 0, "skipped": 0, "errors": 0, "error_details": []}
         base_url: str = settings.central_server_url.rstrip("/")
 
         async with httpx.AsyncClient(timeout=20.0) as client:
@@ -575,6 +577,15 @@ class EnrollmentService:
                     if not enrollment_data:
                         results["skipped"] += 1
                         continue
+
+                    for field in ("face_embeddings", "voice_embeddings"):
+                        vectors = enrollment_data.get(field)
+                        if not isinstance(vectors, list) or not vectors:
+                            raise ValueError(
+                                f"Local enrollment {user_id}: missing or invalid {field}; "
+                                "restore embeddings from a verified backup or re-enroll. "
+                                "Record preserved; recovery rejected."
+                            )
 
                     name = enrollment_data.get("user_name") or enrollment_data.get("name")
                     if not name:
@@ -607,8 +618,9 @@ class EnrollmentService:
                         results["synced"] += 1
                     else:
                         results["errors"] += 1
-                except Exception:
+                except Exception as exc:
                     results["errors"] += 1
+                    results["error_details"].append({"user_id": user_id, "error": str(exc)})
 
         return results
     

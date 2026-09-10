@@ -75,7 +75,7 @@ class VADRecorder:
             logger.error(f"Failed to initialize VAD detector: {e}")
             raise
     
-    def record_until_silence(self, output_path: Optional[str] = None) -> Dict:
+    def record_until_silence(self, output_path: Optional[str] = None, stop_event=None) -> Dict:
         """
         Record audio until silence is detected.
         
@@ -151,6 +151,10 @@ class VADRecorder:
             # Recording loop
             while chunks_recorded < max_chunks:
                 try:
+                    if stop_event is not None and stop_event.is_set():
+                        stopped_by = "manual_stop"
+                        break
+
                     # Read audio chunk
                     audio_chunk = audio_stream.read(self.chunk_size, exception_on_overflow=False)
                     

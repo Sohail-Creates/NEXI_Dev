@@ -2,8 +2,7 @@
 """
 NEXI LLM Service - Simple Quick Start Script
 
-This script starts the LLM service with automatic model download from HuggingFace.
-Just run this and wait for the model to download (first time only).
+This script starts the online LLM service using deployment configuration.
 
 Usage:
     python quick_start.py
@@ -24,19 +23,8 @@ def main():
     
     print(f"Working directory: {os.getcwd()}\n")
     
-    # Set environment variables for automatic model download
     env = os.environ.copy()
-    env['LLM_MODEL_PATH'] = 'HuggingFaceTB/SmolLM2-1.7B-Instruct'
-    env['LLM_PORT'] = '8006'
-    env['LLM_DEVICE'] = 'cpu'
-    env['LLM_INFERENCE_TIMEOUT'] = '90.0'
-    
-    print("Configuration:")
-    print(f"  Model: HuggingFaceTB/SmolLM2-1.7B-Instruct")
-    print(f"  Port: 8006")
-    print(f"  Device: CPU")
-    print(f"  Timeout: 90.0 seconds")
-    print("\nStarting service...\n")
+    print("Starting online service using configured OpenRouter settings...\n")
     
     # Start the service
     try:

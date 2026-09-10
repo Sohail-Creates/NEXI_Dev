@@ -10,6 +10,7 @@ import logging
 from ..utils.circuit_breaker import CircuitBreaker
 from .models import ServiceCallResult
 from ..config import ServiceConfig
+from shared.focus_mode import FocusModeClient
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ class TTSServiceClient:
     Synthesizes text to speech in English and Urdu.
     """
 
-    def __init__(self, base_url: str = TTS_SERVICE_URL):
+    def __init__(self, base_url: str = TTS_SERVICE_URL, focus_mode_client=None):
         self.base_url = base_url
         self.timeout = httpx.Timeout(
             connect=5.0,
@@ -38,12 +39,18 @@ class TTSServiceClient:
             failure_threshold=CIRCUIT_BREAKER_MAX_FAILURES,
             recovery_timeout=CIRCUIT_BREAKER_RESET_TIMEOUT
         )
+        self.focus_mode_client = focus_mode_client or FocusModeClient()
+
+    async def cooperate_with_focus(self, request_context="conversation"):
+        """Queue one non-TeachMe call briefly while TeachMe owns focus."""
+        return await self.focus_mode_client.async_defer_if_needed(request_context)
 
     async def synthesize(
         self,
         text: str,
         voice: str = "default",
-        language: str = "en"
+        language: str = "en",
+        request_context: str = "conversation",
     ) -> ServiceCallResult:
         """
         Send text to TTS Service for speech synthesis.
@@ -58,6 +65,7 @@ class TTSServiceClient:
             ServiceCallResult with audio_bytes on success
         """
         try:
+            await self.cooperate_with_focus(request_context)
             if self.circuit_breaker.state.value == "OPEN":
                 return ServiceCallResult(
                     success=False,

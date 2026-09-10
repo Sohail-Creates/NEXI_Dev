@@ -57,14 +57,14 @@ def _find_user_record(app_state, username: str) -> Optional[Dict]:
 async def _persist_users(app_state, request: Request, immediate: bool = False):
     """Persist users to storage"""
     try:
-        from persistence import save_users
+        from sqlite_store import write_records
         users = app_state.db.get("users", [])
-        save_users(users)
+        write_records("users", users, request.state.user_connection)
         logger.info(f"[PERSIST]  Persisted {len(users)} users to disk")
     except Exception as e:
         logger.error(f"[PERSIST]  Failed to persist users: {str(e)}")
-        # Don't raise - let the request continue even if persistence fails
-        # Data is still in memory for this request
+        request.state.persistence_failed = True
+        raise
 
 
 # ============================================================================

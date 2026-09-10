@@ -6,7 +6,8 @@ import asyncio
 import sys
 from pathlib import Path
 
-from persistence import load_users
+from sqlite_store import read_records, connect
+from starlette.responses import JSONResponse
 from routes import user_router
 from routes.conversations_routes import router as conversations_router
 from camera_routes import router as camera_router
@@ -48,7 +49,34 @@ def create_app() -> FastAPI:
     rate_limit_middleware = create_rate_limit_middleware()
     app.middleware("http")(rate_limit_middleware)
 
-    app.state.db = {"users": load_users()}
+    app.state.db = {"users": read_records("users")}
+    app.state.user_store_lock = asyncio.Lock()
+
+    @app.middleware("http")
+    async def transactional_users(request, call_next):
+        if not request.url.path.startswith("/users/") or request.url.path.endswith("/conversations"):
+            return await call_next(request)
+        async with app.state.user_store_lock:
+            connection = connect()
+            try:
+                await asyncio.to_thread(connection.execute, "BEGIN IMMEDIATE")
+                app.state.db["users"] = read_records("users", connection)
+                request.state.user_connection = connection
+                request.state.persistence_failed = False
+                response = await call_next(request)
+                if request.state.persistence_failed:
+                    connection.rollback()
+                    return JSONResponse(status_code=500, content={"detail": "Failed to persist users"})
+                if response.status_code >= 400:
+                    connection.rollback()
+                else:
+                    connection.commit()
+                return response
+            except Exception:
+                connection.rollback()
+                return JSONResponse(status_code=500, content={"detail": "User transaction failed"})
+            finally:
+                connection.close()
     app.include_router(user_router)
     app.include_router(conversations_router)
     app.include_router(camera_router)

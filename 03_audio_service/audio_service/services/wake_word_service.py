@@ -159,13 +159,30 @@ class WakeWordService:
             self.using_keyboard = False
             logger.info("Porcupine initialized")
         except Exception as e:
-            logger.error(f"Porcupine init failed: {e}. Switching to direct voice.")
-            self.porcupine = None
-            self.using_keyboard = True
-            if self.keyboard_listener is None:
-                self.keyboard_listener = KeyboardWakeWordListener(
-                    callback=self._handle_wake_word_detected
-                )
+            self._activate_direct_voice_fallback(e)
+
+    def _activate_direct_voice_fallback(self, error):
+        """Use the same direct-voice path for every wake-detection failure."""
+        logger.error("Wake-word detection failed: %s. Switching to direct voice.", error)
+        self.cleanup_porcupine()
+        self.using_keyboard = True
+        if self.keyboard_listener is None:
+            self.keyboard_listener = KeyboardWakeWordListener(
+                callback=self._handle_wake_word_detected
+            )
+
+    def _run_direct_voice_fallback(self):
+        listener = self.keyboard_listener
+        listener.start()
+        try:
+            while self.is_listening:
+                if listener.error is not None:
+                    self.stats["errors"] += 1
+                    self.is_listening = False
+                    break
+                time.sleep(0.05)
+        finally:
+            listener.stop()
 
     def _handle_wake_word_detected(self, audio_file, confidence):
         """Forward the actual recording captured by the direct voice fallback."""
@@ -249,6 +266,10 @@ class WakeWordService:
             
             # Set flag to stop the loop
             self.is_listening = False
+
+            # Manual stop must interrupt the active direct-voice session first.
+            if self.keyboard_listener is not None:
+                self.keyboard_listener.stop()
             
             # Wait for thread to finish with timeout
             if self.detection_thread is not None:
@@ -291,17 +312,7 @@ class WakeWordService:
         # The fallback listener owns microphone recording when Porcupine is unavailable.
         if self.using_keyboard or self.porcupine is None:
             logger.info("Direct voice fallback active")
-            listener = self.keyboard_listener
-            listener.start()
-            try:
-                while self.is_listening:
-                    if listener.error is not None:
-                        self.stats["errors"] += 1
-                        self.is_listening = False
-                        break
-                    time.sleep(0.2)
-            finally:
-                listener.stop()
+            self._run_direct_voice_fallback()
             return
         
         try:
@@ -428,10 +439,11 @@ class WakeWordService:
                                 )
                             
                         except Exception as loop_error:
-                            logger.error(f"Error in detection loop iteration: {str(loop_error)}")
                             self.stats["errors"] += 1
-                            # Continue loop despite errors
-                            time.sleep(0.1)
+                            raise WakeWordError(
+                                "Wake-word detection iteration failed",
+                                technical_details=str(loop_error),
+                            ) from loop_error
                             
             except sd.PortAudioError as e:
                 if "No audio input device" in str(e):
@@ -440,8 +452,10 @@ class WakeWordService:
                     raise MicrophoneError(str(e), technical_details=str(e)) from e
         
         except Exception as e:
-            logger.error(f"Detection loop failed: {str(e)}")
             self.stats["errors"] += 1
+            if self.is_listening:
+                self._activate_direct_voice_fallback(e)
+                self._run_direct_voice_fallback()
         finally:
             logger.info("Detection loop ended")
     

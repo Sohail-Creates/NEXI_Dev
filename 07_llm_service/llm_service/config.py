@@ -9,6 +9,11 @@ HOST = os.getenv("LLM_HOST", "0.0.0.0")
 PORT = int(os.getenv("LLM_PORT", "8006"))
 DEBUG = os.getenv("LLM_DEBUG", "False").lower() == "true"
 
+# Online provider configuration; the model is selected by deployment config.
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "")
+OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+OPENROUTER_API_KEY_ENV = os.getenv("OPENROUTER_API_KEY_ENV", "OpenRouter_API_Key")
+
 # Inference Configuration
 TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.6"))
 TOP_P = float(os.getenv("LLM_TOP_P", "0.85"))

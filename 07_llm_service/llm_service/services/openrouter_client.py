@@ -5,15 +5,16 @@ import os
 from typing import Dict, List, Any, Optional, Tuple
 import requests
 import time
+from llm_service.config import OPENROUTER_MODEL, OPENROUTER_BASE_URL, OPENROUTER_API_KEY_ENV
 
 logger = logging.getLogger(__name__)
 
 
 class OpenRouterClient:
     """
-    Client for OpenRouter API (meta-llama/llama-3.1-8b-instruct).
+    Client for the configured OpenRouter model.
     
-    Provides fast (~1-5s) responses in Urdu and English with fallback support.
+    Provides online chat completions.
     """
     
     def __init__(self, api_key: Optional[str] = None, timeout: float = 30.0):
@@ -24,15 +25,17 @@ class OpenRouterClient:
             api_key: OpenRouter API key (defaults to env var)
             timeout: Request timeout in seconds
         """
-        self.api_key = api_key or os.getenv("OpenRouter_API_Key")
+        self.api_key = api_key or os.getenv(OPENROUTER_API_KEY_ENV)
         self.timeout = timeout
         self.logger = logging.getLogger(__name__)
-        self.base_url = "https://openrouter.ai/api/v1"
-        self.model = "meta-llama/llama-3.1-8b-instruct"  # Proven working model
+        self.base_url = OPENROUTER_BASE_URL.rstrip("/")
+        self.model = OPENROUTER_MODEL
+        if not self.model:
+            raise ValueError("OPENROUTER_MODEL must be configured")
         self.is_available = bool(self.api_key)
         
         if not self.api_key:
-            self.logger.warning("OpenRouter API key not found - will use local LLM fallback only")
+            self.logger.warning("OpenRouter API key not found - generation unavailable")
     
     async def generate(
         self,
@@ -118,7 +121,7 @@ class OpenRouterClient:
             
             # Handle API errors
             elif response.status_code == 429:
-                self.logger.warning(f"OpenRouter rate limit hit - will fallback to local LLM")
+                self.logger.warning("OpenRouter rate limit hit")
                 return "", {"error": "rate_limited", "elapsed": elapsed}, False
             
             elif response.status_code == 400:
@@ -132,7 +135,7 @@ class OpenRouterClient:
                 return "", {"error": f"bad_request: {error_msg}", "elapsed": elapsed}, False
             
             elif response.status_code >= 500:
-                self.logger.warning(f"OpenRouter server error {response.status_code} - fallback to local")
+                self.logger.warning(f"OpenRouter server error {response.status_code}")
                 return "", {"error": "server_error", "elapsed": elapsed}, False
             
             else:
@@ -143,12 +146,12 @@ class OpenRouterClient:
         
         except requests.exceptions.Timeout:
             elapsed = time.time() - start_time
-            self.logger.warning(f"OpenRouter request timed out after {elapsed:.1f}s - fallback to local")
+            self.logger.warning(f"OpenRouter request timed out after {elapsed:.1f}s")
             return "", {"error": "timeout", "elapsed": elapsed}, False
         
         except requests.exceptions.ConnectionError:
             elapsed = time.time() - start_time
-            self.logger.warning(f"OpenRouter connection error - likely offline - fallback to local")
+            self.logger.warning("OpenRouter connection error")
             return "", {"error": "offline", "elapsed": elapsed}, False
         
         except Exception as e:

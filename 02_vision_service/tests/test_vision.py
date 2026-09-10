@@ -44,7 +44,7 @@ def test_face_detection():
     """Test /detect/faces endpoint"""
     try:
         response = requests.post(
-            f"{BASE_URL}/detect/faces",
+            f"{BASE_URL}/api/v1/detect/faces",
             params={"detector_backend": "opencv", "model_name": "Facenet"},
             timeout=TIMEOUT
         )
@@ -65,7 +65,7 @@ def test_emotions_all_7():
     """Test /analyze/complete endpoint - shows ALL 7 emotions"""
     try:
         response = requests.post(
-            f"{BASE_URL}/analyze/complete",
+            f"{BASE_URL}/api/v1/analyze/complete",
             params={"detector_backend": "opencv", "analyze_emotions": True},
             timeout=TIMEOUT
         )

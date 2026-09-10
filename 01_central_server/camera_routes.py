@@ -1,97 +1,39 @@
-"""
-Camera Management Routes for Central Server
-"""
-
+"""Compatibility camera routes backed by the single resource authority."""
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-
-from camera_manager import get_camera_manager
+from resource_authority import get_resource_authority, ResourceType, PriorityLevel
 
 router = APIRouter(prefix="/camera", tags=["camera"])
 
-
 class CameraRequest(BaseModel):
-    """Camera request payload"""
     service_name: str
     timeout: int = 30
-
+    lease_id: str | None = None
 
 @router.post("/request")
 def request_camera(request: CameraRequest):
-    """
-    Request camera access from Central Server
-    
-    Body:
-    {
-        "service_name": "vision_service",
-        "timeout": 30
-    }
-    
-    Response:
-    {
-        "status": "granted|denied",
-        "message": "...",
-        "held_by": "...",
-        "timestamp": "..."
-    }
-    """
-    manager = get_camera_manager()
-    result = manager.request_camera(request.service_name, request.timeout)
-    return result
-
+    lease = get_resource_authority().request_resource(
+        ResourceType.CAMERA, request.service_name, PriorityLevel.BACKGROUND, request.timeout)
+    if lease.state != "reserved":
+        get_resource_authority().release_resource(lease.lease_id)
+        return {"status": "denied", "message": "Camera is held by another lease"}
+    return {"status": "reserved", "lease_id": lease.lease_id,
+            "message": "Acknowledge the lease before opening the camera"}
 
 @router.post("/release")
 def release_camera(request: CameraRequest):
-    """
-    Release camera access
-    
-    Body:
-    {
-        "service_name": "vision_service"
-    }
-    
-    Response:
-    {
-        "status": "released|error",
-        "message": "...",
-        "timestamp": "..."
-    }
-    """
-    manager = get_camera_manager()
-    result = manager.release_camera(request.service_name)
-    return result
-
+    authority = get_resource_authority()
+    lease = authority.check_lease_status(request.lease_id)
+    if not lease or lease["service_name"] != request.service_name:
+        raise HTTPException(status_code=409, detail="Matching lease_id is required")
+    authority.release_resource(request.lease_id)
+    return {"status": "released", "message": "Physical release acknowledged"}
 
 @router.get("/status")
 def get_camera_status():
-    """
-    Get current camera status
-    
-    Response:
-    {
-        "status": "available|in_use",
-        "held_by": "service_name or null",
-        "held_duration_seconds": 5.3,
-        "timestamp": "..."
-    }
-    """
-    manager = get_camera_manager()
-    result = manager.get_camera_status()
-    return result
-
+    state = get_resource_authority().get_all_resources_status()["camera"]
+    return {"status": "available" if state["is_available"] else "in_use", **state}
 
 @router.post("/force-release")
 def force_release_camera():
-    """
-    Force release camera (admin only - use with caution)
-    
-    Response:
-    {
-        "status": "released|error",
-        "message": "...",
-        "timestamp": "..."
-    }
-    """
-    manager = get_camera_manager()
-    result = manager.force_release_camera()
-    return result
+    raise HTTPException(status_code=409, detail="Physical closure must be acknowledged before release")

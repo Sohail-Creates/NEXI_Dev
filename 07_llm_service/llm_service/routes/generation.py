@@ -16,6 +16,10 @@ class GenerationRequest(BaseModel):
 
 def create_generation_routes(openrouter_client):
     router = APIRouter(prefix="/api/v1")
+
+    @router.get("/model-info")
+    async def model_info():
+        return {"provider": "openrouter", "model": openrouter_client.model}
     
     @router.post("/generate")
     async def generate(req: GenerationRequest):

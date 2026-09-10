@@ -10,6 +10,7 @@ import httpx
 from shared.utils.circuit_breaker import CircuitBreaker
 from shared.models.api_response import APIResponse, ErrorCode
 from shared.config import ServiceConfig
+from shared.focus_mode import FocusModeClient
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ class LLMServiceClient:
         base_url: Optional[str] = None,
         timeout: float = 150.0,  # CPU inference takes time, allow 150s
         max_retries: int = 1,
+        focus_mode_client=None,
     ):
         """
         Initialize LLM service client.
@@ -42,6 +44,7 @@ class LLMServiceClient:
         self.timeout = timeout
         self.max_retries = max_retries
         self.logger = logging.getLogger(__name__)
+        self.focus_mode_client = focus_mode_client or FocusModeClient()
         
         # Circuit breaker configuration
         self.circuit_breaker = CircuitBreaker(
@@ -72,6 +75,10 @@ class LLMServiceClient:
         """Get a random fallback response when LLM is unavailable."""
         responses = self.fallback_responses.get(language, self.fallback_responses["en"])
         return random.choice(responses)
+
+    async def cooperate_with_focus(self, request_context="conversation"):
+        """Queue one non-TeachMe call briefly while TeachMe owns focus."""
+        return await self.focus_mode_client.async_defer_if_needed(request_context)
     
     async def generate_response(
         self,
@@ -84,6 +91,7 @@ class LLMServiceClient:
         max_response_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
+        request_context: str = "conversation",
     ) -> Tuple[bool, Dict[str, Any]]:
         """
         Generate AI response with context.
@@ -102,6 +110,8 @@ class LLMServiceClient:
         Returns:
             Tuple of (success, response_dict)
         """
+        await self.cooperate_with_focus(request_context)
+
         # Check circuit breaker
         if not self.circuit_breaker.is_closed():
             self.logger.warning("LLM service circuit breaker is open")

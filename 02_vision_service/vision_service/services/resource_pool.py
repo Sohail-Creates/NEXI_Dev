@@ -16,12 +16,25 @@ from .camera_client import get_camera_client
 logger = logging.getLogger(__name__)
 
 
+class _CameraView:
+    """Serialize frame reads with physical release during cooperative revocation."""
+    def __init__(self, pool):
+        self.pool = pool
+
+    def read(self):
+        with self.pool._frame_lock:
+            if self.pool._camera is None:
+                return False, None
+            return self.pool._camera.read()
+
+
 class ResourcePool:
     """Thread-safe resource pool for camera and YOLO object detector"""
     
     def __init__(self, camera_timeout: int = 10,
                  central_server_url: str = "http://localhost:8000",
-                 enable_object_detection: bool = True, object_model_name: str = "yolov8n"):
+                 enable_object_detection: bool = True, object_model_name: str = "yolov8n",
+                 release_watchdog_timeout: float = 3.0):
         """
         Initialize resource pool
         
@@ -33,10 +46,14 @@ class ResourcePool:
         """
         self._camera = None
         self._camera_lock = threading.RLock()
+        self._frame_lock = threading.Lock()
         self._object_detector = None
         self._object_detector_lock = threading.RLock()
         self._is_shutting_down = False
         self._camera_timeout = camera_timeout
+        if release_watchdog_timeout <= 0:
+            raise ValueError("Release watchdog timeout must be positive")
+        self._release_watchdog_timeout = release_watchdog_timeout
         self.enable_object_detection = enable_object_detection
         self.object_model_name = object_model_name
         
@@ -45,56 +62,84 @@ class ResourcePool:
         
     @contextmanager
     def get_camera(self, timeout: Optional[int] = None):
-        """
-        Get camera with automatic lock and cleanup
-        Thread-safe camera access pattern from Vision-Nexus
-        
-        Args:
-            timeout: Lock timeout in seconds
-            
-        Yields:
-            cv2.VideoCapture instance
-            
-        Raises:
-            RuntimeError: If camera not available or lock timeout
-        """
+        """Open only after an acknowledged grant; close before acknowledging release."""
         timeout = timeout or self._camera_timeout
-        
-        # REQUEST CAMERA FROM CENTRAL SERVER
-        if not self._camera_client.request_camera(timeout=timeout):
-            raise RuntimeError(
-                "Camera access denied - another service is using the camera. "
-                "Please try again later or check Central Server camera status."
-            )
-        
-        acquired = self._camera_lock.acquire(timeout=timeout)
-        
-        if not acquired:
-            self._camera_client.release_camera()
+        if not self._camera_lock.acquire(timeout=timeout):
             raise RuntimeError(f"Camera lock timeout ({timeout}s) - resource busy")
-        
         try:
-            if self._camera is None or not self._camera.isOpened():
+            if self._is_shutting_down or self._camera is not None:
+                raise RuntimeError("Camera is shutting down or previous closure failed")
+            if not self._camera_client.request_camera(timeout=timeout):
+                raise RuntimeError("Camera access denied or authority unreachable")
+            stop = threading.Event()
+            watcher = None
+            try:
                 self._camera = cv2.VideoCapture(0)
                 if not self._camera.isOpened():
                     raise RuntimeError("Cannot access camera - verify device connection")
-                logger.info(" Camera initialized successfully")
-            
-            yield self._camera
-        
-        except Exception as e:
-            logger.error(f"Camera access error: {e}")
-            if self._camera:
-                try:
-                    self._camera.release()
-                except:
-                    pass
-                self._camera = None
-            raise
+                watcher = threading.Thread(target=self._watch_lease,
+                    args=(self._camera_client.lease_id, stop, self._camera), daemon=True)
+                watcher.start()
+                yield _CameraView(self)
+            finally:
+                stop.set()
+                if watcher is not None:
+                    watcher.join(timeout=3)
+                # A closure exception intentionally prevents release acknowledgement.
+                self._close_camera()
+                self._camera_client.release_camera()
         finally:
             self._camera_lock.release()
-            # RELEASE CAMERA BACK TO CENTRAL SERVER
-            self._camera_client.release_camera()
+
+    def _close_camera(self, camera=None, forced=False):
+        camera = self._camera if camera is None else camera
+        acquired = False if forced else self._frame_lock.acquire(timeout=1)
+        if not forced and not acquired:
+            raise RuntimeError("Camera frame read did not yield for physical release")
+        try:
+            if camera is not None:
+                camera.release()
+                if camera.isOpened():
+                    raise RuntimeError("Camera driver did not confirm physical closure")
+                if self._camera is camera:
+                    self._camera = None
+        finally:
+            if acquired:
+                self._frame_lock.release()
+
+    def _force_release(self, camera, lease_id, acknowledged):
+        if acknowledged.is_set():
+            return
+        try:
+            # This runs inside the holder process, independently of a stuck read
+            # or graceful-release lock. Never acknowledge an unconfirmed close.
+            self._close_camera(camera, forced=True)
+            if self._camera_client.release_camera(timeout=1, lease_id=lease_id, forced=True):
+                acknowledged.set()
+                logger.warning("Camera watchdog confirmed forced release for lease %s", lease_id)
+                return
+        except Exception as exc:
+            logger.error("Camera watchdog could not confirm release: %s", exc)
+        timer = threading.Timer(1.0, self._force_release, args=(camera, lease_id, acknowledged))
+        timer.daemon = True
+        timer.start()
+
+    def _watch_lease(self, lease_id, stop, camera):
+        while not stop.wait(0.25):
+            if not self._camera_client.lease_active(lease_id):
+                acknowledged = threading.Event()
+                timer = threading.Timer(self._release_watchdog_timeout, self._force_release,
+                                        args=(camera, lease_id, acknowledged))
+                timer.daemon = True
+                timer.start()
+                try:
+                    self._close_camera(camera)
+                    if self._camera_client.release_camera(timeout=1, lease_id=lease_id):
+                        acknowledged.set()
+                        timer.cancel()
+                except Exception as exc:
+                    logger.error("Physical camera release failed: %s", exc)
+                return
     
     def is_camera_available(self) -> bool:
         """Check if camera is available and working"""

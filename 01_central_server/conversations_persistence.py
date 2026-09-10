@@ -36,6 +36,7 @@ from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta
 import logging
 import uuid
+from sqlite_store import read_records, write_records, transactional
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -64,108 +65,15 @@ def _is_cache_valid() -> bool:
 
 
 def load_conversations() -> Dict[str, Any]:
-    """
-    Load conversations from cache or disk.
-    
-    Returns:
-        Dictionary with 'conversations' key containing list of conversation objects
-    """
-    global _cache, _cache_timestamp
-    
-    # Check if cached data is still valid
-    if _is_cache_valid() and _cache is not None:
-        return _cache
-    
-    # Cache miss or expired - load from disk with lock
-    with _cache_lock:
-        # Double-check after acquiring lock
-        if _is_cache_valid() and _cache is not None:
-            return _cache
-        
-        try:
-            if not CONVERSATIONS_FILE.exists():
-                _cache = {"conversations": []}
-                _cache_timestamp = datetime.now()
-                return _cache
-            
-            # Read from disk and parse JSON
-            data = json.loads(CONVERSATIONS_FILE.read_text(encoding="utf-8"))
-            
-            # Validate structure
-            if not isinstance(data, dict) or "conversations" not in data:
-                data = {"conversations": []}
-            
-            # Update cache
-            _cache = data
-            _cache_timestamp = datetime.now()
-            
-            return _cache
-            
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON decode error in conversations.json: {e}")
-            return {"conversations": []}
-        except Exception as e:
-            logger.error(f"Error loading conversations from disk: {e}")
-            return {"conversations": []}
+    return {"conversations": read_records("conversations")}
 
 
 def save_conversations(data: Dict[str, Any]) -> bool:
-    """
-    Save conversations to disk atomically.
-    
-    Uses atomic write pattern:
-    1. Write to temporary file
-    2. Atomic rename (ACID on most filesystems)
-    3. Update cache
-    
-    Args:
-        data: Dictionary with 'conversations' key
-        
-    Returns:
-        True if successful, False otherwise
-    """
-    global _cache, _cache_timestamp
-    
-    try:
-        # Ensure data directory exists
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        
-        # Validate structure
-        if not isinstance(data, dict) or "conversations" not in data:
-            logger.error("Invalid data structure - must have 'conversations' key")
-            return False
-        
-        # Create backup before write
-        if CONVERSATIONS_FILE.exists():
-            backup_path = CONVERSATIONS_FILE.with_suffix('.backup')
-            try:
-                import shutil
-                shutil.copy2(CONVERSATIONS_FILE, backup_path)
-            except Exception as e:
-                logger.warning(f"Could not create backup: {e}")
-        
-        # Atomic write: write to temp file first, then rename
-        temp_file = CONVERSATIONS_FILE.with_suffix('.tmp')
-        
-        with open(temp_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        
-        # Atomic rename
-        temp_file.replace(CONVERSATIONS_FILE)
-        
-        # Update cache after successful write
-        with _cache_lock:
-            _cache = data
-            _cache_timestamp = datetime.now()
-        
-        logger.debug(f"[PERSIST] Saved {len(data.get('conversations', []))} conversations")
-        return True
-        
-    except Exception as e:
-        logger.error(f"Error saving conversations: {e}")
-        return False
+    write_records("conversations", data["conversations"])
+    return True
 
 
+@transactional
 def add_conversation(
     user_id: str,
     user_message: str,
@@ -278,6 +186,7 @@ def get_conversation_by_id(conversation_id: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+@transactional
 def delete_user_conversations(user_id: str) -> bool:
     """Delete all conversations for a user."""
     try:
@@ -359,15 +268,8 @@ def _cleanup_old_conversations(data: Dict[str, Any], user_id: str) -> None:
 
 # Initialize conversations file if it doesn't exist
 def initialize_conversations_file() -> None:
-    """Ensure conversations file exists with proper structure."""
-    try:
-        if not CONVERSATIONS_FILE.exists():
-            DATA_DIR.mkdir(parents=True, exist_ok=True)
-            initial_data = {"conversations": []}
-            save_conversations(initial_data)
-            logger.info("Conversations file initialized")
-    except Exception as e:
-        logger.error(f"Error initializing conversations file: {e}")
+    """Verify the explicitly migrated store exists; never create a JSON file."""
+    read_records("conversations")
 
 
 # Initialize on import

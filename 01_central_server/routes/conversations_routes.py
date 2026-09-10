@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 import logging
+import asyncio
 
 from conversations_persistence import (
     add_conversation,
@@ -73,7 +74,7 @@ async def store_user_conversation(
         metadata = body.get("metadata", {})
         
         # Store conversation
-        success = add_conversation(
+        success = await asyncio.to_thread(add_conversation,
             user_id=user_id,
             user_message=user_message,
             assistant_response=assistant_response,
@@ -133,7 +134,7 @@ async def get_user_conversations_endpoint(
     }
     """
     try:
-        conversations = get_user_conversations(
+        conversations = await asyncio.to_thread(get_user_conversations,
             user_id=user_id,
             limit=limit,
             start_timestamp=start_date,
@@ -169,7 +170,7 @@ async def get_single_conversation(
     Response: Single conversation object with all details
     """
     try:
-        conversation = get_conversation_by_id(conversation_id)
+        conversation = await asyncio.to_thread(get_conversation_by_id, conversation_id)
         
         if not conversation:
             raise HTTPException(
@@ -204,7 +205,7 @@ async def delete_all_user_conversations(
     }
     """
     try:
-        success = delete_user_conversations(user_id)
+        success = await asyncio.to_thread(delete_user_conversations, user_id)
         
         if not success:
             raise HTTPException(
@@ -243,7 +244,7 @@ async def get_conversation_statistics(request: Request = None) -> Dict[str, Any]
     }
     """
     try:
-        stats = get_conversation_stats()
+        stats = await asyncio.to_thread(get_conversation_stats)
         
         logger.info(f"[CONVERSATION] Stats retrieved: {stats.get('total_conversations')} total conversations")
         

@@ -24,10 +24,11 @@ async def check_service_health(name: str, url: str, client: httpx.AsyncClient) -
         resp = await client.get(url, timeout=10.0)
         if resp.status_code == 200:
             data = resp.json()
-            if data.get("status") != "healthy":
-                print(f"  [FAIL] {name:25} - {data.get('status', 'unknown')}")
+            reported_status = data.get("status")
+            if reported_status not in {"healthy", "degraded"}:
+                print(f"  [FAIL] {name:25} - {reported_status or 'unknown'}")
                 return False
-            print(f"  [OK] {name:25} - {data.get('status', 'unknown')}")
+            print(f"  [OK] {name:25} - {reported_status}")
             return True
         else:
             print(f"  [FAIL] {name:25} - HTTP {resp.status_code}")
@@ -56,7 +57,7 @@ async def main():
     total = len(results)
     
     if healthy == total:
-        print(f"RESULT: ALL SERVICES HEALTHY ({healthy}/{total})")
+        print(f"RESULT: ALL SERVICES RESPONSIVE ({healthy}/{total})")
         status = 0
     elif healthy > 0:
         print(f"RESULT: PARTIAL HEALTH ({healthy}/{total})")

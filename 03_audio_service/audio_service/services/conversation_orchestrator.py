@@ -19,6 +19,14 @@ from datetime import datetime
 from enum import Enum
 import aiohttp
 
+try:
+    from shared.focus_mode import FocusModeClient
+except ImportError:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parents[3]))
+    from shared.focus_mode import FocusModeClient
+
 from audio_service.config import CONVERSATION_CONFIG
 from audio_service.services.conversation_state import ConversationStateManager, ConversationState
 
@@ -84,7 +92,8 @@ class ConversationOrchestrator:
         llm_service_url: str = "http://localhost:8006",
         tts_service_url: str = "http://localhost:8003",
         timeout: int = 30,
-        max_retries: int = 3
+        max_retries: int = 3,
+        focus_mode_client=None,
     ):
         """
         Initialize orchestrator with service URLs.
@@ -107,6 +116,7 @@ class ConversationOrchestrator:
         self.tts_url = tts_service_url
         self.timeout = aiohttp.ClientTimeout(total=timeout)
         self.max_retries = max_retries
+        self.focus_mode_client = focus_mode_client or FocusModeClient()
         
         # Session pool
         self.session: Optional[aiohttp.ClientSession] = None
@@ -259,6 +269,7 @@ class ConversationOrchestrator:
             Generated response text or None if failed
         """
         try:
+            await self.focus_mode_client.async_defer_if_needed("conversation")
             logger.info(f"Calling LLM for user {user_id}: {user_text[:50]}...")
             
             payload = {
@@ -305,6 +316,7 @@ class ConversationOrchestrator:
             WAV audio bytes or None if failed
         """
         try:
+            await self.focus_mode_client.async_defer_if_needed("conversation")
             logger.info(f"Synthesizing speech ({speaker_id}): {text[:50]}...")
             
             payload = {
