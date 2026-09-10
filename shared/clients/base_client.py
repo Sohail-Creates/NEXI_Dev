@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 import asyncio
 
 import httpx
+from shared.security import merge_internal_headers
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -137,6 +138,7 @@ class AsyncHTTPClient:
     ) -> httpx.Response:
         """Make HTTP request with retry logic."""
         client = self._ensure_client()
+        kwargs["headers"] = merge_internal_headers(kwargs.get("headers"))
         return await client.request(method, url, **kwargs)
 
     async def get(

@@ -15,6 +15,7 @@ from enum import Enum
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 from .config import vision_config
+from shared.security import internal_service_headers
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,7 @@ class VisionServiceConnector:
                     async with session.post(
                         url,
                         json=payload,
+                        headers=internal_service_headers(),
                         timeout=aiohttp.ClientTimeout(total=timeout)
                     ) as response:
                         if response.status == 200:
@@ -137,6 +139,7 @@ class VisionServiceConnector:
                 
                 async with session.get(
                     url,
+                    headers=internal_service_headers(),
                     timeout=aiohttp.ClientTimeout(total=self.health_timeout)
                 ) as response:
                     is_healthy = response.status == 200

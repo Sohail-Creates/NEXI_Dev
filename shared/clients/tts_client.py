@@ -6,6 +6,7 @@ Handles text-to-speech synthesis in multiple languages and voices.
 """
 
 import httpx
+from shared.security import internal_service_headers
 import logging
 from ..utils.circuit_breaker import CircuitBreaker
 from .models import ServiceCallResult
@@ -90,7 +91,8 @@ class TTSServiceClient:
                 }
                 response = await client.post(
                     f"{self.base_url}/speak",
-                    json=payload
+                    json=payload,
+                    headers=internal_service_headers(),
                 )
 
                 if response.status_code == 200:

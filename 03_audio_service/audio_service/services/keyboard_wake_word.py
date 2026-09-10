@@ -8,6 +8,7 @@ from enum import Enum
 from typing import Callable
 
 import requests
+from shared.security import internal_service_headers
 
 try:
     from shared.focus_mode import FocusModeClient
@@ -50,6 +51,7 @@ class MicrophoneLeaseClient:
                 "priority": "ACTIVE_CONVERSATION",
                 "timeout_seconds": max(30, int(CONVERSATION_CONFIG["timeout_seconds"] + 5)),
             },
+            headers=internal_service_headers(),
             timeout=self.timeout,
         )
         response.raise_for_status()
@@ -61,6 +63,7 @@ class MicrophoneLeaseClient:
             raise RuntimeError("Microphone authority did not reserve a lease")
         acknowledgement = requests.post(
             self.central_url + "/resources/acknowledge/" + lease_id,
+            headers=internal_service_headers(),
             timeout=self.timeout,
         )
         acknowledgement.raise_for_status()
@@ -72,6 +75,7 @@ class MicrophoneLeaseClient:
     def release(self, lease_id):
         response = requests.post(
             self.central_url + "/resources/release/" + lease_id,
+            headers=internal_service_headers(),
             timeout=self.timeout,
         )
         return response.status_code in (200, 404)
@@ -79,6 +83,7 @@ class MicrophoneLeaseClient:
     def status(self, lease_id):
         response = requests.get(
             self.central_url + "/resources/status/" + lease_id,
+            headers=internal_service_headers(),
             timeout=self.timeout,
         )
         if response.status_code == 404:

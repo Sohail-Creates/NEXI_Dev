@@ -4,6 +4,7 @@ import requests
 import os
 import psutil
 from typing import Optional
+from shared.security import internal_service_headers
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,8 @@ class CameraResourceClient:
                 params={"resource_type": "camera", "service_name": self.service_name,
                         "priority": "BACKGROUND", "timeout_seconds": timeout,
                         "holder_pid": os.getpid(), "holder_started": psutil.Process().create_time(),
-                        "holder_port": int(os.getenv("VISION_PORT", "8001"))}, timeout=timeout)
+                        "holder_port": int(os.getenv("VISION_PORT", "8001"))},
+                headers=internal_service_headers(), timeout=timeout)
             response.raise_for_status()
             data = response.json()
             self.lease_id = data.get("lease_id")
@@ -32,7 +34,7 @@ class CameraResourceClient:
                 self.release_camera(timeout)
                 return False
             response = requests.post(self.central_server_url + "/resources/acknowledge/" + self.lease_id,
-                                     timeout=timeout)
+                                     headers=internal_service_headers(), timeout=timeout)
             response.raise_for_status()
             data = response.json()
             self.camera_granted = data.get("granted") is True and data.get("lease_id") == self.lease_id
@@ -52,7 +54,7 @@ class CameraResourceClient:
             return True
         try:
             response = requests.post(self.central_server_url + "/resources/release/" + lease_id,
-                                     params={"forced": forced}, timeout=timeout)
+                                     params={"forced": forced}, headers=internal_service_headers(), timeout=timeout)
             if response.status_code == 404 or (response.status_code == 200 and response.json().get("success") is True):
                 if self.lease_id == lease_id:
                     self.lease_id = None
@@ -63,7 +65,8 @@ class CameraResourceClient:
 
     def lease_active(self, lease_id, timeout=1):
         try:
-            response = requests.get(self.central_server_url + "/resources/status/" + lease_id, timeout=timeout)
+            response = requests.get(self.central_server_url + "/resources/status/" + lease_id,
+                                    headers=internal_service_headers(), timeout=timeout)
             return response.status_code == 200 and response.json().get("lease", {}).get("state") == "active"
         except (requests.RequestException, ValueError):
             return False

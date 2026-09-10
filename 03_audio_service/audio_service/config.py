@@ -124,7 +124,7 @@ SPEAKER_CONFIG = {
     "max_duration": float(os.getenv("SPEAKER_MAX_DURATION", 10.0)),
     "similarity_threshold": float(os.getenv("SPEAKER_SIMILARITY_THRESHOLD", 0.7)),
     "enable_cache": os.getenv("SPEAKER_ENABLE_CACHE", "true").lower() == "true",
-    "embeddings_file": Path(os.getenv("SPEAKER_EMBEDDINGS_FILE", "03_audio_service/audio_service/data/speaker_embeddings.pkl")),
+    "embeddings_file": Path(os.getenv("SPEAKER_EMBEDDINGS_FILE", "03_audio_service/audio_service/data/speaker_embeddings.json")),
     "enrollment_duration": float(os.getenv("SPEAKER_ENROLLMENT_DURATION", 5.0)),
     "min_speech_duration": float(os.getenv("SPEAKER_MIN_SPEECH_DURATION", 1.0)),
     "verification_threshold": float(os.getenv("SPEAKER_VERIFICATION_THRESHOLD", 0.65))

@@ -1,4 +1,5 @@
 import os
+from shared.security import internal_service_headers
 import asyncio
 import httpx
 from datetime import datetime
@@ -238,11 +239,16 @@ class EnrollmentService:
             # Stage 9: Completed
             progress.update_stage('completed')
             print(f"[Enrollment] [OK] ENROLLMENT COMPLETED SUCCESSFULLY")
+            from shared.jwt_manager import get_jwt_manager
+            token_result = get_jwt_manager().create_session_token(user_id)
             
             return {
                 "status": "success",
                 "message": f"User '{user_name}' enrolled successfully with 5 images and 5 voice samples",
                 "user_id": user_id,
+                "access_token": token_result["token"],
+                "token_type": token_result["type"],
+                "expires_in": token_result["expires_in"],
                 "details": {
                     "avg_face_confidence": round(avg_face_confidence, 3),
                     "avg_voice_quality": round(avg_voice_quality, 3),
@@ -570,7 +576,7 @@ class EnrollmentService:
         results = {"total": len(user_ids), "synced": 0, "skipped": 0, "errors": 0, "error_details": []}
         base_url: str = settings.central_server_url.rstrip("/")
 
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with httpx.AsyncClient(timeout=20.0, headers=internal_service_headers()) as client:
             for user_id in user_ids:
                 try:
                     enrollment_data = await self.storage.get_enrollment_smart(user_id)
@@ -643,7 +649,7 @@ class EnrollmentService:
             # Use asynchronous httpx client to query Central Server
             import httpx
             from config.settings import settings
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=10.0, headers=internal_service_headers()) as client:
                 try:
                     url: str = f"{settings.central_server_url}/users/check"
                     response: httpx.Response = await client.get(
@@ -698,7 +704,9 @@ class EnrollmentService:
             # Step 2: Delete from Central Server
             try:
                 import httpx
-                async with httpx.AsyncClient(timeout=10.0) as client:
+                async with httpx.AsyncClient(
+                    timeout=10.0, headers=internal_service_headers(actual_user_id)
+                ) as client:
                     response: httpx.Response = await client.delete(f"{settings.central_server_url}/users/{actual_user_id}")
                     if response.status_code != 200:
                         raise HTTPException(

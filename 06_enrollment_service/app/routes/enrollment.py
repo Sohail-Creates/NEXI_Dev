@@ -1,4 +1,6 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Query, Path
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Query, Path, Request
+from shared.jwt_manager import require_user_ownership
+from shared.security import require_internal_service
 from typing import List, Optional
 from app.models import (
     EnrollmentResponse, 
@@ -29,8 +31,9 @@ user_check_service = UserCheckService()
 
 
 @router.get("/check-user", response_model=UserCheckResponse)
-async def check_user(name: str = Query(..., description="Name of the user to check")):
+async def check_user(request: Request, name: str = Query(..., description="Name of the user to check")):
 
+    await require_internal_service(request)
     result = await user_check_service.check_user_exists(name)
     return UserCheckResponse(**result)
 
@@ -65,6 +68,7 @@ async def enroll_user(
 
 @router.post("/improve-training/{user_id}", response_model=ImproveTrainingResponse)
 async def improve_training(
+    request: Request,
     user_id: str,
     additional_photos: List[UploadFile] = File(..., description="5 additional photos"),
     additional_voice_samples: List[UploadFile] = File(..., description="5 additional voice samples")
@@ -74,6 +78,8 @@ async def improve_training(
     (OLD samples are KEPT, NEW samples are ADDED)
     """
     try:
+        actual_user_id, _ = await enrollment_service.find_enrollment_by_user_name(user_id)
+        require_user_ownership(request, actual_user_id or user_id)
         result = await enrollment_service.improve_training(
             user_id=user_id,
             additional_photos=additional_photos,
@@ -90,6 +96,7 @@ async def improve_training(
 
 @router.post("/update-model/{user_id}", response_model=UpdateModelResponse)
 async def update_model(
+    request: Request,
     user_id: str,
     new_photos: List[UploadFile] = File(..., description="5 new photos (replaces old)"),
     new_voice_samples: List[UploadFile] = File(..., description="5 new voice samples (replaces old)")
@@ -99,6 +106,8 @@ async def update_model(
     (OLD samples are DELETED, REPLACED by NEW samples)
     """
     try:
+        actual_user_id, _ = await enrollment_service.find_enrollment_by_user_name(user_id)
+        require_user_ownership(request, actual_user_id or user_id)
         result = await enrollment_service.update_model(
             user_id=user_id,
             new_photos=new_photos,
@@ -129,9 +138,10 @@ async def health_check_detailed():
 
 
 @router.get("/storage/stats", response_model=StorageStatsResponse)
-async def get_storage_stats():
+async def get_storage_stats(request: Request):
 
     try:
+        await require_internal_service(request)
         stats = await enrollment_service.get_storage_stats()
         return StorageStatsResponse(**stats)
     except Exception as e:
@@ -139,9 +149,10 @@ async def get_storage_stats():
 
 
 @router.get("/storage/list")
-async def list_enrollments():
+async def list_enrollments(request: Request):
 
     try:
+        await require_internal_service(request)
         user_ids = await enrollment_service.list_all_enrollments()
         return {
             "status": "success",
@@ -154,10 +165,12 @@ async def list_enrollments():
 
 @router.get("/storage/{user_id}", response_model=EnrollmentDataResponse)
 async def get_enrollment_data(
+    request: Request,
     user_id: str = Path(..., description="User ID to retrieve")
 ):
 
     try:
+        require_user_ownership(request, user_id)
         data = await enrollment_service.get_enrollment_data(user_id)
         
         if not data:
@@ -180,10 +193,12 @@ async def get_enrollment_data(
 
 @router.delete("/storage/{user_id}")
 async def delete_enrollment_data(
+    request: Request,
     user_id: str = Path(..., description="User ID to delete")
 ):
 
     try:
+        require_user_ownership(request, user_id)
         success = await enrollment_service.delete_enrollment_data(user_id)
         
         if not success:
@@ -205,10 +220,13 @@ async def delete_enrollment_data(
 
 @router.delete("/delete-user/{user_name}")
 async def delete_user_synchronized(
+    request: Request,
     user_name: str = Path(..., description="User name to delete")
 ):
     """Delete user from both Central Server and local storage"""
     try:
+        actual_user_id, _ = await enrollment_service.find_enrollment_by_user_name(user_name)
+        require_user_ownership(request, actual_user_id or user_name)
         result = await enrollment_service.delete_user_from_all(user_name)
         return result
     except HTTPException:

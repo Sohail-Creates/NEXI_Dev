@@ -11,6 +11,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from shared.security import allowed_origins, InternalRouteAuthMiddleware, UploadGuardMiddleware
 
 from audio_service.config import (
     API_CONFIG,
@@ -299,10 +300,25 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+app.add_middleware(
+    InternalRouteAuthMiddleware,
+    protected_prefixes=(
+        "/api/v1/process-voice", "/api/v1/verify-speaker", "/api/v1/enroll-speaker",
+        "/api/v1/transcribe", "/api/v1/speaker-sync",
+    ),
+)
+app.add_middleware(
+    UploadGuardMiddleware,
+    rules={
+        "/api/v1/verify-speaker": (10 * 1024 * 1024, ("multipart/form-data",)),
+        "/api/v1/process-voice": (10 * 1024 * 1024, ("multipart/form-data",)),
+        "/api/v1/transcribe": (10 * 1024 * 1024, ("multipart/form-data", "application/octet-stream")),
+    },
 )
 
 # Add Phase 1 security: Rate limiting middleware

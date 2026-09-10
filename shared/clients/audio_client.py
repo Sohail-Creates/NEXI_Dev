@@ -7,6 +7,7 @@ Every method wraps the HTTP call in the circuit breaker.
 """
 
 import httpx
+from shared.security import internal_service_headers
 import logging
 from typing import Optional
 from ..utils.circuit_breaker import CircuitBreaker, CircuitBreakerException
@@ -110,7 +111,8 @@ class AudioServiceClient:
                         
                         response = await client.post(
                             f"{self.base_url}/api/v1/process-voice",
-                            files=files
+                            files=files,
+                            headers=internal_service_headers(speaker_id),
                         )
                         
                         logger.info(f"[AudioClient]  Response received: status={response.status_code}")
@@ -258,7 +260,8 @@ class AudioServiceClient:
                 files = {"file": (filename, audio_file_bytes, "audio/wav")}
                 response = await client.post(
                     f"{self.base_url}/api/v1/process-voice",
-                    files=files
+                    files=files,
+                    headers=internal_service_headers(),
                 )
                 logger.info(f"[process_voice]  Response: status={response.status_code}")
 
@@ -362,20 +365,23 @@ class AudioServiceClient:
                 files = {"file": (filename, audio_file_bytes, "audio/wav")}
                 data = {"user_id": user_id}
                 response = await client.post(
-                    f"{self.base_url}/verify-speaker",
+                    f"{self.base_url}/api/v1/verify-speaker",
                     files=files,
-                    data=data
+                    data=data,
+                    headers=internal_service_headers(user_id),
                 )
                 logger.info(f"[AudioClient] Audio Service response: status={response.status_code}")
 
                 if response.status_code == 200:
                     self.circuit_breaker.record_success()
                     result_data = response.json()
-                    # Handle APIResponse structure: data is nested under 'data' field
-                    if isinstance(result_data, dict) and result_data.get("success"):
-                        data = result_data.get("data", {})
-                        match = data.get("match", False)
-                        similarity = data.get("similarity", 0.0)
+                    # Accept the service's direct response and its legacy APIResponse envelope.
+                    if isinstance(result_data, dict):
+                        data = result_data.get("data", result_data)
+                        match = data.get("is_verified", data.get("match", False))
+                        similarity = data.get("confidence", data.get("similarity", 0.0))
+                        data["verified"] = match
+                        data["similarity"] = similarity
                         logger.info(f"[AudioClient] verify_speaker SUCCESS - match={match}, similarity={similarity:.3f}")
                         return ServiceCallResult(
                             success=True,
@@ -456,7 +462,8 @@ class AudioServiceClient:
                 response = await client.post(
                     f"{self.base_url}/transcribe",
                     files=files,
-                    data=data
+                    data=data,
+                    headers=internal_service_headers(),
                 )
                 logger.info(f"[AudioClient] Audio Service response: status={response.status_code}")
 
@@ -516,7 +523,7 @@ class AudioServiceClient:
 
             logger.info("[AudioClient] Calling Audio Service: POST /wake-word/start")
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(f"{self.base_url}/wake-word/start")
+                response = await client.post(f"{self.base_url}/wake-word/start", headers=internal_service_headers())
                 logger.info(f"[AudioClient] Audio Service response: status={response.status_code}")
                 if response.status_code == 200:
                     self.circuit_breaker.record_success()
@@ -572,7 +579,7 @@ class AudioServiceClient:
 
             logger.info("[AudioClient] Calling Audio Service: POST /wake-word/stop")
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(f"{self.base_url}/wake-word/stop")
+                response = await client.post(f"{self.base_url}/wake-word/stop", headers=internal_service_headers())
                 logger.info(f"[AudioClient] Audio Service response: status={response.status_code}")
                 if response.status_code == 200:
                     self.circuit_breaker.record_success()
@@ -628,7 +635,7 @@ class AudioServiceClient:
 
             logger.info("[AudioClient] Calling Audio Service: GET /wake-word/status")
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.get(f"{self.base_url}/wake-word/status")
+                response = await client.get(f"{self.base_url}/wake-word/status", headers=internal_service_headers())
                 logger.info(f"[AudioClient] Audio Service response: status={response.status_code}")
                 if response.status_code == 200:
                     self.circuit_breaker.record_success()

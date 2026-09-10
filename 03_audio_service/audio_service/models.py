@@ -196,6 +196,9 @@ class VerifySpeakerResponse(BaseModel):
     is_verified: bool = Field(description="Whether speaker was successfully verified")
     threshold: float = Field(description="Verification threshold used")
     timestamp: str = Field(description="ISO format timestamp of verification")
+    access_token: Optional[str] = Field(default=None, description="Signed user session token")
+    token_type: Optional[str] = None
+    expires_in: Optional[int] = None
 
 
 # Week 2: Speech-to-Text Models

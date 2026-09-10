@@ -7,6 +7,7 @@ Every method wraps the HTTP call in the circuit breaker.
 """
 
 import httpx
+from shared.security import internal_service_headers
 import logging
 from ..utils.circuit_breaker import CircuitBreaker, CircuitBreakerException
 from .models import ServiceCallResult
@@ -68,7 +69,8 @@ class VisionServiceClient:
                 files = {"file": (filename, image_file_bytes, "image/jpeg")}
                 response = await client.post(
                     f"{self.base_url}/process-face",
-                    files=files
+                    files=files,
+                    headers=internal_service_headers(),
                 )
 
                 if response.status_code == 200:

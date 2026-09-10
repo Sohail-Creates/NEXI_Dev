@@ -2,6 +2,7 @@ import httpx
 import os
 from typing import Dict, Optional
 from fastapi import HTTPException
+from shared.security import internal_service_headers
 
 
 class UserCheckService:
@@ -25,7 +26,8 @@ class UserCheckService:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.get(
                     f"{self.central_server_url}/users/check",
-                    params={"name": user_name}
+                    params={"name": user_name},
+                    headers=internal_service_headers(),
                 )
                 
                 if response.status_code == 200:

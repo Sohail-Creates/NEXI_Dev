@@ -11,6 +11,9 @@ class EnrollmentResponse(BaseModel):
     message: str
     user_id: Optional[str] = None
     details: Optional[Dict[str, Any]] = None
+    access_token: Optional[str] = None
+    token_type: Optional[str] = None
+    expires_in: Optional[int] = None
 
 class UserCheckResponse(BaseModel):
     exists: bool

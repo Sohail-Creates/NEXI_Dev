@@ -17,6 +17,7 @@ from urllib.parse import urlencode
 from enum import Enum
 from collections import deque
 from shared.semantic_embeddings import SEMANTIC_EMBEDDING_DIMENSION
+from shared.security import internal_service_headers
 
 logger = logging.getLogger(__name__)
 
@@ -259,7 +260,8 @@ class TeachMeConnector:
         self,
         query: str,
         k: int = 5,
-        threshold: float = 0.3
+        threshold: float = 0.3,
+        user_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Semantic similarity search by embedding.
@@ -283,7 +285,7 @@ class TeachMeConnector:
             
             params = urlencode({"query_object_name": query, "top_k": k, "similarity_threshold": threshold})
             endpoint = f"/knowledge/search/embedding?{params}"
-            response = await self.request("POST", endpoint)
+            response = await self.request("POST", endpoint, user_id=user_id)
             return response or {"results": []}
         
         finally:
@@ -369,7 +371,8 @@ class TeachMeConnector:
         method: str,
         endpoint: str,
         data: Optional[Dict[str, Any]] = None,
-        timeout: Optional[float] = None
+        timeout: Optional[float] = None,
+        user_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Make HTTP request with circuit breaker and retry logic.
@@ -399,7 +402,7 @@ class TeachMeConnector:
                 import time
                 start_time = time.time()
                 
-                result = await self._make_request(method, endpoint, data, timeout)
+                result = await self._make_request(method, endpoint, data, timeout, user_id)
                 
                 elapsed_ms = (time.time() - start_time) * 1000
                 self.metrics["request_times"].append(elapsed_ms)
@@ -433,7 +436,8 @@ class TeachMeConnector:
         method: str,
         endpoint: str,
         data: Optional[Dict[str, Any]],
-        timeout: float
+        timeout: float,
+        user_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Make actual HTTP request"""
         session = await self.get_session()
@@ -445,7 +449,8 @@ class TeachMeConnector:
                     method,
                     url,
                     json=data,
-                    timeout=aiohttp.ClientTimeout(total=timeout)
+                    timeout=aiohttp.ClientTimeout(total=timeout),
+                    headers=internal_service_headers(user_id),
                 ) as response:
                     if response.status in (200, 201):
                         result = await response.json()

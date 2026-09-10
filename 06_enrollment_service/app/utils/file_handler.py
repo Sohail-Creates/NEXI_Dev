@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import uuid
 from fastapi import UploadFile, HTTPException
 from typing import Tuple
@@ -20,20 +21,22 @@ async def save_uploaded_file(
             detail=f"Invalid file type. Allowed: {allowed_types}"
         )
     
-    # Read file content
-    content = await file.read()
-    
-    # Validate file size
-    if len(content) > max_size:
+    # Starlette supplies the parsed part size without another full read.
+    if file.size is not None and file.size > max_size:
         raise HTTPException(
-            status_code=400,
+            status_code=413,
             detail=f"File too large. Max size: {max_size} bytes"
         )
+    content = await file.read(max_size + 1)
+    if len(content) > max_size:
+        raise HTTPException(status_code=413, detail=f"File too large. Max size: {max_size} bytes")
     
     # Generate unique filename
-    file_ext = file.filename.split('.')[-1]
-    unique_filename = f"{uuid.uuid4()}.{file_ext}"
-    filepath = os.path.join(upload_dir, unique_filename)
+    extensions = {"image/jpeg": ".jpg", "image/jpg": ".jpg", "image/png": ".png",
+                  "audio/wav": ".wav", "audio/mpeg": ".mp3", "audio/mp3": ".mp3"}
+    file_ext = extensions[file.content_type]
+    unique_filename = f"{uuid.uuid4()}{file_ext}"
+    filepath = str(Path(upload_dir).resolve() / unique_filename)
     
     # Ensure directory exists
     os.makedirs(upload_dir, exist_ok=True)

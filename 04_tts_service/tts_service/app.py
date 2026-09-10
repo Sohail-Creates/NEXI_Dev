@@ -16,6 +16,7 @@ from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from shared.security import allowed_origins, InternalRouteAuthMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
 from piper import PiperVoice, SynthesisConfig
@@ -334,11 +335,12 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(InternalRouteAuthMiddleware, protected_prefixes=("/speak",))
 
 # Add Phase 1 security: Rate limiting middleware
 # Exempt: /health endpoints (should always be available)

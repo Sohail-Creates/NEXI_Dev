@@ -9,7 +9,8 @@ import os
 import re
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from shared.jwt_manager import require_session_claims
 from langdetect import DetectorFactory, LangDetectException, detect
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -115,18 +116,21 @@ class RestrictedRAGPipeline:
         self.teachme_client = teachme_client
         self.llm_client = llm_client
 
-    async def answer(self, query: str) -> RAGResult:
+    async def answer(self, query: str, user_id: str | None = None) -> RAGResult:
         command_response = classify_basic_command(query)
         if command_response is not None:
             return RAGResult(response=command_response, source="basic_command")
 
         require_english(query)
 
-        retrieval = await self.teachme_client.search_by_embedding(
-            query=query,
-            k=RAG_TOP_K,
-            threshold=RAG_MATCH_THRESHOLD,
-        )
+        retrieval_args = {
+            "query": query,
+            "k": RAG_TOP_K,
+            "threshold": RAG_MATCH_THRESHOLD,
+        }
+        if user_id is not None:
+            retrieval_args["user_id"] = user_id
+        retrieval = await self.teachme_client.search_by_embedding(**retrieval_args)
         candidates = (retrieval or {}).get("results", [])
         matches = [
             item for item in candidates
@@ -158,10 +162,11 @@ _llm_client = LLMServiceClient()
 
 
 @router.post("/query")
-async def restricted_query(request: RAGQueryRequest):
+async def restricted_query(request: RAGQueryRequest, http_request: Request):
     try:
+        claims = require_session_claims(http_request)
         pipeline = RestrictedRAGPipeline(get_teachme_connector(), _llm_client)
-        result = await pipeline.answer(request.query)
+        result = await pipeline.answer(request.query, user_id=str(claims["sub"]))
         return {"success": True, "response": result.response, "source": result.source}
     except NonEnglishQueryError as exc:
         raise HTTPException(status_code=422, detail={"code": "english_only", "message": str(exc)}) from exc

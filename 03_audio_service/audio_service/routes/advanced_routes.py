@@ -529,7 +529,10 @@ async def sync_speakers_from_central():
         
         # Fetch all users from Central Server
         try:
-            response = requests.get(f"{central_url}/users/list", timeout=10)
+            from shared.security import internal_service_headers
+            response = requests.get(
+                f"{central_url}/users/list", headers=internal_service_headers(), timeout=10
+            )
             if response.status_code != 200:
                 logger.error(f"Failed to fetch users from Central Server: {response.status_code}")
                 return {
@@ -863,6 +866,10 @@ async def verify_speaker(file: UploadFile = File(...)):
         # Determine if speaker was successfully verified
         threshold = get_speaker_service().get_verification_threshold()
         is_verified = confidence >= threshold and user_id != "unknown"
+        token_result = None
+        if is_verified:
+            from shared.jwt_manager import get_jwt_manager
+            token_result = get_jwt_manager().create_session_token(user_id)
         
         response = VerifySpeakerResponse(
             status="success",
@@ -870,7 +877,10 @@ async def verify_speaker(file: UploadFile = File(...)):
             confidence=round(confidence, 4),
             is_verified=is_verified,
             threshold=threshold,
-            timestamp=datetime.now().isoformat()
+            timestamp=datetime.now().isoformat(),
+            access_token=token_result["token"] if token_result else None,
+            token_type=token_result["type"] if token_result else None,
+            expires_in=token_result["expires_in"] if token_result else None,
         )
         
         logger.info(

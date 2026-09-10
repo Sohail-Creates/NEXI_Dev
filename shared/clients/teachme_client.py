@@ -6,6 +6,7 @@ Handles object learning, fact storage, and knowledge retrieval.
 """
 
 import httpx
+from shared.security import internal_service_headers
 import logging
 from typing import Optional, List
 from ..utils.circuit_breaker import CircuitBreaker
@@ -76,7 +77,8 @@ class TeachMeServiceClient:
 
                 response = await client.post(
                     f"{self.base_url}/learn/object",
-                    json=payload
+                    json=payload,
+                    headers=internal_service_headers(),
                 )
 
                 if response.status_code == 200:
@@ -151,7 +153,8 @@ class TeachMeServiceClient:
 
                 response = await client.post(
                     f"{self.base_url}/learn/fact",
-                    json=payload
+                    json=payload,
+                    headers=internal_service_headers(user_id),
                 )
 
                 if response.status_code == 200:
@@ -220,7 +223,8 @@ class TeachMeServiceClient:
 
                 response = await client.get(
                     f"{self.base_url}/knowledge",
-                    params=params
+                    params=params,
+                    headers=internal_service_headers(user_id),
                 )
 
                 if response.status_code == 200:
@@ -284,7 +288,8 @@ class TeachMeServiceClient:
 
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.delete(
-                    f"{self.base_url}/forget/{item_type}/{item_id}"
+                    f"{self.base_url}/forget/{item_type}/{item_id}",
+                    headers=internal_service_headers(),
                 )
 
                 if response.status_code == 200:

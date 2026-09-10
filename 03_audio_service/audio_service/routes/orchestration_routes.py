@@ -8,8 +8,11 @@ Handles: audio upload, transcription, LLM, TTS, playback as single operations.
 
 import logging
 import asyncio
+import os
+from pathlib import Path
 from typing import Optional
-from fastapi import APIRouter, HTTPException, status, UploadFile, File
+from fastapi import APIRouter, HTTPException, Request, status, UploadFile, File
+from shared.jwt_manager import require_user_ownership
 from pydantic import BaseModel
 from audio_service.services.conversation_state import ConversationState
 
@@ -29,6 +32,18 @@ class ConversationRequest(BaseModel):
     speaker_id: str = "jenny"
 
 
+def _validated_audio_path(value: str) -> str:
+    allowed_root = Path(os.getenv(
+        "VAD_RECORDING_OUTPUT_DIR", "03_audio_service/audio_service/data/recordings"
+    )).resolve()
+    candidate = Path(value).resolve()
+    if not candidate.is_relative_to(allowed_root) or candidate.suffix.lower() not in {".wav", ".mp3"}:
+        raise HTTPException(status_code=400, detail="audio_file_path is outside the recording directory")
+    if not candidate.is_file():
+        raise HTTPException(status_code=404, detail="audio_file_path does not exist")
+    return str(candidate)
+
+
 class ConversationResponse(BaseModel):
     """Response with full conversation results."""
     success: bool
@@ -41,7 +56,7 @@ class ConversationResponse(BaseModel):
 
 
 @router.post("/conversation/turn", response_model=ConversationResponse)
-async def process_conversation_turn(request: ConversationRequest):
+async def process_conversation_turn(request: ConversationRequest, http_request: Request):
     """
     Process complete conversation turn end-to-end.
     
@@ -75,6 +90,7 @@ async def process_conversation_turn(request: ConversationRequest):
             "language": "en"
         }
     """
+    require_user_ownership(http_request, request.user_id)
     from main import orchestrator, conversation_state_manager
     
     if not orchestrator:
@@ -88,9 +104,10 @@ async def process_conversation_turn(request: ConversationRequest):
         logger.info(f"Starting conversation turn for user: {request.user_id}")
         
         # Process turn asynchronously
+        audio_path = _validated_audio_path(request.audio_file_path)
         turn = await orchestrator.process_conversation_turn(
             user_id=request.user_id,
-            audio_file_path=request.audio_file_path,
+            audio_file_path=audio_path,
             speaker_id=request.speaker_id
         )
         
@@ -146,7 +163,7 @@ async def get_orchestration_metrics():
 
 
 @router.post("/conversation/start", status_code=status.HTTP_200_OK)
-async def start_continuous_conversation(user_id: str):
+async def start_continuous_conversation(user_id: str, request: Request):
     """
     Start continuous conversation session.
     
@@ -156,6 +173,7 @@ async def start_continuous_conversation(user_id: str):
     Returns:
         Session initialization status
     """
+    require_user_ownership(request, user_id)
     from main import conversation_state_manager, stop_word_detector
     
     if not conversation_state_manager:
@@ -191,7 +209,7 @@ async def start_continuous_conversation(user_id: str):
 
 
 @router.post("/conversation/end", status_code=status.HTTP_200_OK)
-async def end_continuous_conversation(user_id: str):
+async def end_continuous_conversation(user_id: str, request: Request):
     """
     End continuous conversation session.
     
@@ -201,6 +219,7 @@ async def end_continuous_conversation(user_id: str):
     Returns:
         Session termination status
     """
+    require_user_ownership(request, user_id)
     from main import conversation_state_manager, stop_word_detector
     
     if not conversation_state_manager:

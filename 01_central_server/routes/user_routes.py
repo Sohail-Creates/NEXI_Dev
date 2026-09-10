@@ -15,6 +15,9 @@ import threading
 import shutil
 from pathlib import Path
 import os
+from shared.clients.audio_client import AudioServiceClient
+from shared.jwt_manager import require_user_ownership
+from shared.security import require_internal_service
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -36,6 +39,7 @@ def _get_enrollment_lock(username: str) -> threading.RLock:
 
 # Create router
 router = APIRouter(prefix="/users", tags=["User Management"])
+_audio_verification_client = AudioServiceClient()
 
 
 def _get_app_state(request: Request):
@@ -70,6 +74,24 @@ async def _persist_users(app_state, request: Request, immediate: bool = False):
 # ============================================================================
 # USER MANAGEMENT ENDPOINTS
 # ============================================================================
+
+@router.post("/session/voice")
+async def create_voice_session(file: UploadFile = File(...)):
+    """Issue a session only through Audio's existing speaker matcher."""
+    result = await _audio_verification_client.verify_speaker(
+        speaker_id="candidate",
+        audio_file_bytes=await file.read(),
+        filename=file.filename or "verification.wav",
+    )
+    data = result.data or {}
+    if not result.success or not data.get("verified") or not data.get("access_token"):
+        raise HTTPException(status_code=401, detail="Biometric verification failed")
+    return {
+        "user_id": data["user_id"],
+        "access_token": data["access_token"],
+        "token_type": data.get("token_type", "bearer"),
+        "expires_in": data.get("expires_in"),
+    }
 
 @router.post("/data/add_user")
 async def add_user(user_data: Dict[str, Any], request: Request):
@@ -109,6 +131,7 @@ async def add_user(user_data: Dict[str, Any], request: Request):
 async def list_users(request: Request):
     """List all registered users with their embeddings"""
     try:
+        await require_internal_service(request)
         app_state = _get_app_state(request)
         if not app_state:
             raise Exception("Application state not initialized")
@@ -145,6 +168,7 @@ async def list_users(request: Request):
 async def check_user_exists(name: str, request: Request):
     """Check if user exists"""
     try:
+        await require_internal_service(request)
         app_state = _get_app_state(request)
         user = _find_user_record(app_state, name)
         if user:
@@ -167,6 +191,7 @@ async def check_user_exists(name: str, request: Request):
 async def search_user_by_name(user_name: str, request: Request):
     """Get user data by name"""
     try:
+        await require_internal_service(request)
         app_state = _get_app_state(request)
         user = _find_user_record(app_state, user_name)
         if user:
@@ -183,6 +208,7 @@ async def search_user_by_name(user_name: str, request: Request):
 async def get_user_by_id(user_id: str, request: Request):
     """Get user profile by user_id."""
     try:
+        require_user_ownership(request, user_id)
         app_state = _get_app_state(request)
         if not app_state:
             raise Exception("Application state not initialized")
@@ -207,6 +233,7 @@ async def get_user_conversation_history(
 ):
     """Get latest conversation turns for a user."""
     try:
+        require_user_ownership(request, user_id)
         app_state = _get_app_state(request)
         if not app_state:
             raise Exception("Application state not initialized")
@@ -241,6 +268,7 @@ async def get_user_conversation_history(
 async def delete_user(user_id: str, request: Request):
     """Delete user and all associated data"""
     try:
+        require_user_ownership(request, user_id)
         app_state = _get_app_state(request)
         if not app_state:
             raise Exception("Application state not initialized")
@@ -534,6 +562,7 @@ async def register_user_old(user_data: Dict[str, Any], request: Request):
 async def update_user_embeddings(user_id: str, payload: Dict[str, Any], request: Request):
     """Replace user embeddings entirely (used for re-enrollment)."""
     try:
+        require_user_ownership(request, user_id)
         app_state = _get_app_state(request)
         if not app_state:
             raise Exception("Application state not initialized")
@@ -614,6 +643,7 @@ async def append_user_embeddings(user_id: str, request: Request):
     Preserves all historical embeddings for improved model training.
     """
     try:
+        require_user_ownership(request, user_id)
         # Get JSON payload
         body = await request.json()
         

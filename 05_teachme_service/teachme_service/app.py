@@ -4,8 +4,10 @@ from pathlib import Path
 root_dir = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(root_dir))
 
-from fastapi import FastAPI, HTTPException, status, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, status, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from shared.security import allowed_origins
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from .models import LearningRequest, LearningType
 from .knowledge_base import knowledge_base
@@ -19,8 +21,6 @@ import os
 import asyncio
 from datetime import datetime, timedelta
 from collections import defaultdict
-import hashlib
-import secrets
 import json
 
 # Import Phase 1 security: Rate limiting
@@ -28,28 +28,15 @@ from shared.rate_limiter import create_rate_limit_middleware
 
 # NEW: Import resilient systems
 from .vision_service_connector import init_vision_connector, get_vision_connector
-from .authentication import init_authentication, AUTH_ENABLED
+from .authentication import init_authentication, AUTH_ENABLED, require_api_key
 from .graceful_shutdown import init_graceful_shutdown, get_shutdown_manager
 
-# JWT imports for Phase 4 Authentication
-try:
-    import jwt
-    JWT_AVAILABLE = True
-except ImportError:
-    JWT_AVAILABLE = False
-    print("Warning: PyJWT not installed for authentication")
-
-# ============= CONSTANTS FOR PHASE 4 SECURITY =============
+# ============= CONSTANTS FOR REQUEST SAFETY =============
 MAX_REQUESTS_PER_MINUTE = 60
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "dev-secret-key-change-in-production-" + secrets.token_hex(16))
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
 
-# In-memory storage for rate limiting and auth
+# In-memory storage for rate limiting and search caching
 request_counts = defaultdict(list)  # Store request timestamps per IP
-api_keys = {}  # In production, use database
 search_cache = {}  # Cache for search results
-auth_clients = {}  # Registered clients
 
 logger = logging.getLogger(__name__)
 
@@ -99,49 +86,6 @@ def sanitize_list(items: list, max_items: int = 50) -> list:
 # Simple caching for search results (definition only, moved to after app init)
 CACHE_EXPIRY_SECONDS = 300
 
-# ============= PHASE 4: JWT AUTHENTICATION FUNCTIONS =============
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    """Create JWT access token"""
-    if not JWT_AVAILABLE:
-        raise HTTPException(status_code=500, detail="JWT not available")
-    
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.utcnow() + expires_delta
-    else:
-        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    
-    to_encode.update({"exp": expire})
-    
-    try:
-        encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
-        return encoded_jwt
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Token generation failed: {str(e)}")
-
-def verify_token(token: str) -> dict:
-    """Verify JWT token and return payload"""
-    if not JWT_AVAILABLE:
-        raise HTTPException(status_code=500, detail="JWT not available")
-    
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token has expired")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-def generate_api_key(client_name: str) -> str:
-    """Generate a secure API key"""
-    return hashlib.sha256(
-        (client_name + secrets.token_hex(32)).encode()
-    ).hexdigest()
-
-def validate_api_key(api_key: str) -> bool:
-    """Check if API key is valid"""
-    return api_key in api_keys
-
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
@@ -158,32 +102,35 @@ app = FastAPI(
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     """Standardized error response"""
-    return {
-        "error": {
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": {
             "status_code": exc.status_code,
             "detail": exc.detail,
             "timestamp": datetime.utcnow().isoformat(),
             "path": str(request.url)
-        }
-    }
+        }},
+        headers=exc.headers,
+    )
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
     """Catch-all exception handler"""
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
-    return {
-        "error": {
+    return JSONResponse(
+        status_code=500,
+        content={"error": {
             "status_code": 500,
             "detail": "Internal server error",
             "timestamp": datetime.utcnow().isoformat(),
             "path": str(request.url)
-        }
-    }
+        }},
+    )
 
 # CORS Configuration (Production)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(","),
+    allow_origins=allowed_origins(),
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
@@ -401,101 +348,8 @@ async def health_detailed():
             "note": "Detailed metrics require psutil"
         }
 
-# ========== PHASE 4: AUTHENTICATION ENDPOINTS ==========
-
-@app.post("/auth/register")
-async def register_client(client_name: str, client_secret: Optional[str] = None):
-    """
-    Register a new API client (Phase 4 Security)
-    Returns API key for future requests
-    """
-    try:
-        if not JWT_AVAILABLE:
-            raise HTTPException(status_code=503, detail="Authentication service unavailable")
-        
-        client_name = validate_input(client_name, "client_name", max_length=100)
-        
-        if client_name in auth_clients:
-            raise HTTPException(status_code=400, detail="Client already registered")
-        
-        api_key = generate_api_key(client_name)
-        api_keys[api_key] = {
-            "client_name": client_name,
-            "created_at": datetime.utcnow().isoformat(),
-            "active": True
-        }
-        auth_clients[client_name] = api_key
-        
-        logger.info(f"New client registered: {client_name}")
-        
-        return {
-            "status": "success",
-            "client_name": client_name,
-            "api_key": api_key,
-            "message": "Store this API key securely. It will not be shown again."
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Registration error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/auth/token")
-async def get_token(api_key: str, expires_in_minutes: int = Query(60, ge=5, le=1440)):
-    """
-    Get JWT token using API key (Phase 4 Security)
-    Token valid for specified duration (5-1440 minutes, default 60)
-    """
-    try:
-        if not JWT_AVAILABLE:
-            raise HTTPException(status_code=503, detail="Authentication service unavailable")
-        
-        if not validate_api_key(api_key):
-            logger.warning(f"Invalid API key attempt")
-            raise HTTPException(status_code=401, detail="Invalid API key")
-        
-        client_info = api_keys[api_key]
-        if not client_info["active"]:
-            raise HTTPException(status_code=403, detail="Client is inactive")
-        
-        access_token = create_access_token(
-            data={"sub": client_info["client_name"]},
-            expires_delta=timedelta(minutes=expires_in_minutes)
-        )
-        
-        return {
-            "access_token": access_token,
-            "token_type": "bearer",
-            "expires_in": expires_in_minutes,
-            "client_name": client_info["client_name"]
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Token generation error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/auth/validate")
-async def validate_token(token: str):
-    """
-    Validate JWT token (Phase 4 Security)
-    Check if token is valid and return payload
-    """
-    try:
-        payload = verify_token(token)
-        return {
-            "valid": True,
-            "client_name": payload.get("sub"),
-            "expires_at": datetime.fromtimestamp(payload.get("exp")).isoformat()
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Token validation error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
 @app.post("/learn", status_code=status.HTTP_201_CREATED)
-async def learn_item(request: LearningRequest):
+async def learn_item(request: LearningRequest, _auth=Depends(require_api_key)):
     """
     Learn new object/fact with validation, security, and embeddings
     Fully async with performance tracking - PRODUCTION READY
@@ -618,7 +472,7 @@ async def learn_item(request: LearningRequest):
 # ========== Knowledge Viewing Endpoints ==========
 
 @app.get("/knowledge/objects")
-async def get_objects():
+async def get_objects(_auth=Depends(require_api_key)):
     """Get all learned objects"""
     objects = knowledge_base.get_all_objects()
     return {
@@ -627,7 +481,7 @@ async def get_objects():
     }
 
 @app.get("/knowledge/facts")
-async def get_facts():
+async def get_facts(_auth=Depends(require_api_key)):
     """Get all learned facts"""
     facts = knowledge_base.get_all_facts()
     return {
@@ -636,7 +490,7 @@ async def get_facts():
     }
 
 @app.get("/knowledge/all")
-async def get_all_knowledge():
+async def get_all_knowledge(_auth=Depends(require_api_key)):
     """Get all learned items"""
     all_items = knowledge_base.get_all_items()
     return {
@@ -645,7 +499,7 @@ async def get_all_knowledge():
     }
 
 @app.get("/knowledge/stats")
-async def get_knowledge_stats():
+async def get_knowledge_stats(_auth=Depends(require_api_key)):
     """Get knowledge base statistics"""
     stats = knowledge_base.get_items_count()
     return {
@@ -654,7 +508,7 @@ async def get_knowledge_stats():
     }
 
 @app.get("/knowledge/search/{name}")
-async def search_knowledge(name: str):
+async def search_knowledge(name: str, _auth=Depends(require_api_key)):
     """Search items by name or subject"""
     try:
         results = knowledge_base.search_by_name(name)
@@ -673,7 +527,8 @@ async def search_knowledge(name: str):
 async def search_by_embedding(
     query_object_name: str = Query(..., description="Object name to search for", max_length=200),
     top_k: int = Query(5, description="Number of results", ge=1, le=50),
-    similarity_threshold: float = Query(0.5, description="Min similarity (0.0-1.0)", ge=0.0, le=1.0)
+    similarity_threshold: float = Query(0.5, description="Min similarity (0.0-1.0)", ge=0.0, le=1.0),
+    _auth=Depends(require_api_key),
 ):
     """
     Search for similar objects using embeddings (Phase 2)
@@ -757,7 +612,8 @@ async def search_by_embedding(
 @app.delete("/forget/{item_id}")
 async def forget_item(
     item_id: str,
-    permanent: bool = Query(False, description="Permanently delete instead of soft delete")
+    permanent: bool = Query(False, description="Permanently delete instead of soft delete"),
+    _auth=Depends(require_api_key),
 ):
     """Forget/remove a specific knowledge item"""
     try:
@@ -801,7 +657,8 @@ async def forget_item(
 @app.delete("/forget-by-name/{name}")
 async def forget_by_name(
     name: str,
-    item_type: Optional[LearningType] = Query(None, description="Filter by item type")
+    item_type: Optional[LearningType] = Query(None, description="Filter by item type"),
+    _auth=Depends(require_api_key),
 ):
     """Forget items by name (for objects) or subject (for facts)"""
     try:
@@ -835,7 +692,8 @@ async def search_advanced(
     name: Optional[str] = Query(None, description="Search by object name"),
     category: Optional[str] = Query(None, description="Filter by category"),
     tag: Optional[str] = Query(None, description="Filter by tag"),
-    search_mode: str = Query("any", description="Search mode: 'any' (OR) or 'all' (AND)")
+    search_mode: str = Query("any", description="Search mode: 'any' (OR) or 'all' (AND)"),
+    _auth=Depends(require_api_key),
 ):
     """
     Advanced multi-field search (Phase 3 Optimization)
@@ -944,7 +802,7 @@ async def search_advanced(
         }
 
 @app.post("/knowledge/learn-batch")
-async def learn_batch(requests_list: List[LearningRequest]):
+async def learn_batch(requests_list: List[LearningRequest], _auth=Depends(require_api_key)):
     """
     Batch learning endpoint (Phase 3 Optimization)
     Learn multiple objects/facts in one call
@@ -1008,7 +866,11 @@ async def learn_batch(requests_list: List[LearningRequest]):
 # ========== PHASE 5: INTELLIGENCE & RECOMMENDATIONS ==========
 
 @app.get("/knowledge/related/{item_id}")
-async def get_related_items(item_id: str, top_k: int = Query(5, ge=1, le=20)):
+async def get_related_items(
+    item_id: str,
+    top_k: int = Query(5, ge=1, le=20),
+    _auth=Depends(require_api_key),
+):
     """
     Find related objects through embeddings (Phase 5 Intelligence)
     Returns similar objects/facts based on semantic similarity

@@ -5,6 +5,7 @@ from typing import Dict, Optional
 from fastapi import HTTPException
 import logging
 import asyncio
+from shared.security import internal_service_headers
 
 # Add shared utils to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
@@ -24,7 +25,7 @@ class CentralServerClient:
     async def check_health(self) -> bool:
         """Check if Central Server is healthy"""
         try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(timeout=5.0, headers=internal_service_headers()) as client:
                 response = await client.get(f"{self.base_url}/health")
                 return response.status_code == 200
         except Exception as e:
@@ -72,7 +73,7 @@ class CentralServerClient:
         
         for attempt in range(self.max_retries):
             try:
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                async with httpx.AsyncClient(timeout=self.timeout, headers=internal_service_headers()) as client:
                     url = f"{self.base_url}{endpoint}"
                     logger.info(f"Registering user with Central Server (attempt {attempt + 1}/{self.max_retries})")
                     
@@ -150,7 +151,7 @@ class CentralServerClient:
             Dict containing user data or None if not found
         """
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, headers=internal_service_headers()) as client:
                 response = await client.get(
                     f"{self.base_url}/users/search/{user_name}"
                 )
@@ -194,7 +195,7 @@ class CentralServerClient:
             Dict with update status
         """
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, headers=internal_service_headers(user_id)) as client:
                 payload = {
                     "face_embeddings": face_embeddings,
                     "voice_embeddings": voice_embeddings,
@@ -248,7 +249,7 @@ class CentralServerClient:
             Dict with update status and new total counts
         """
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, headers=internal_service_headers(user_id)) as client:
                 payload = {
                     "face_embeddings": face_embeddings,
                     "voice_embeddings": voice_embeddings,

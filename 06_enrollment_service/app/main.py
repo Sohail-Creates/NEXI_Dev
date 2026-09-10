@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from shared.security import allowed_origins, UploadGuardMiddleware
 from app.routes import enrollment
 from app.models import HealthCheckResponse
 from dotenv import load_dotenv
@@ -60,10 +61,18 @@ app = FastAPI(
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+app.add_middleware(
+    UploadGuardMiddleware,
+    rules={
+        "/enrollment/enroll": (76 * 1024 * 1024, ("multipart/form-data",)),
+        "/enrollment/improve-training": (76 * 1024 * 1024, ("multipart/form-data",)),
+        "/enrollment/update-model": (76 * 1024 * 1024, ("multipart/form-data",)),
+    },
 )
 
 # Add Phase 1 security: Rate limiting middleware

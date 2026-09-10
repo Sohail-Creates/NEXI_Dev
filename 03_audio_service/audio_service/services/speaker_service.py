@@ -5,6 +5,8 @@ Implements speaker enrollment and voice-based identification using voice embeddi
 
 import logging
 import pickle
+import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Tuple, Optional, List
@@ -29,6 +31,72 @@ from audio_service.utils.cache import get_default_cache
 
 logger = logging.getLogger(__name__)
 
+SPEAKER_STORE_SCHEMA_VERSION = 1
+SPEAKER_EMBEDDING_DIMENSION = 256
+
+
+class _RestrictedNumpyUnpickler(pickle.Unpickler):
+    """Legacy-only loader restricted to the globals used by NumPy arrays."""
+
+    _ALLOWED = {
+        ("numpy", "dtype"),
+        ("numpy", "ndarray"),
+        ("numpy.core.multiarray", "_reconstruct"),
+        ("numpy._core.multiarray", "_reconstruct"),
+        ("numpy.core.multiarray", "scalar"),
+        ("numpy._core.multiarray", "scalar"),
+    }
+
+    def find_class(self, module, name):
+        if (module, name) not in self._ALLOWED:
+            raise pickle.UnpicklingError(f"Forbidden legacy pickle global: {module}.{name}")
+        return super().find_class(module, name)
+
+
+def _validated_embeddings(records) -> Dict[str, np.ndarray]:
+    if not isinstance(records, dict):
+        raise SpeakerServiceError("Speaker store must contain an object keyed by user_id")
+    validated = {}
+    for user_id, values in records.items():
+        if not isinstance(user_id, str) or not user_id or not isinstance(values, (list, np.ndarray)):
+            raise SpeakerServiceError("Invalid speaker store record")
+        vector = np.asarray(values, dtype=np.float32)
+        if vector.shape != (SPEAKER_EMBEDDING_DIMENSION,) or not np.isfinite(vector).all():
+            raise SpeakerServiceError(f"Invalid embedding for {user_id}")
+        validated[user_id] = vector
+    return validated
+
+
+def _write_json_store(path: Path, records: Dict[str, np.ndarray]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": SPEAKER_STORE_SCHEMA_VERSION,
+        "embedding_dimension": SPEAKER_EMBEDDING_DIMENSION,
+        "speakers": {key: value.astype(float).tolist() for key, value in records.items()},
+    }
+    import tempfile
+    fd, temporary = tempfile.mkstemp(dir=str(path.parent), prefix=path.name, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, allow_nan=False, separators=(",", ":"))
+        Path(temporary).replace(path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def migrate_legacy_pickle(legacy_path: Path, json_path: Path) -> Dict[str, int]:
+    """Idempotently migrate a trusted legacy file through a restricted loader."""
+    if json_path.exists():
+        with json_path.open("r", encoding="utf-8") as handle:
+            existing = _validated_embeddings(json.load(handle).get("speakers", {}))
+        return {"examined": len(existing), "updated": 0, "unchanged": len(existing)}
+    if not legacy_path.exists():
+        return {"examined": 0, "updated": 0, "unchanged": 0}
+    with legacy_path.open("rb") as handle:
+        records = _validated_embeddings(_RestrictedNumpyUnpickler(handle).load())
+    _write_json_store(json_path, records)
+    return {"examined": len(records), "updated": len(records), "unchanged": 0}
+
 
 class SpeakerServiceError(Exception):
     """Custom exception for speaker service errors."""
@@ -48,6 +116,9 @@ class SpeakerService:
         # Use a generic object type for encoder to avoid importing resemblyzer at module import time
         self.encoder: Optional[object] = None
         self.embeddings_file: Path = SPEAKER_CONFIG["embeddings_file"]
+        if self.embeddings_file.suffix.lower() != ".json":
+            self.embeddings_file = self.embeddings_file.with_suffix(".json")
+        self.legacy_embeddings_file = self.embeddings_file.with_suffix(".pkl")
         self.speaker_embeddings: Dict[str, np.ndarray] = {}
 
         # Load existing embeddings if available
@@ -102,17 +173,24 @@ class SpeakerService:
         If the file doesn't exist, it will be created on the first enrollment.
         """
         try:
+            migration = migrate_legacy_pickle(self.legacy_embeddings_file, self.embeddings_file)
+            if migration["updated"]:
+                logger.info("Migrated %d legacy speaker embeddings", migration["updated"])
             if self.embeddings_file.exists():
-                with open(self.embeddings_file, 'rb') as f:
-                    self.speaker_embeddings = pickle.load(f)
+                with self.embeddings_file.open("r", encoding="utf-8") as f:
+                    payload = json.load(f)
+                if payload.get("schema_version") != SPEAKER_STORE_SCHEMA_VERSION:
+                    raise SpeakerServiceError("Unsupported speaker store schema")
+                if payload.get("embedding_dimension") != SPEAKER_EMBEDDING_DIMENSION:
+                    raise SpeakerServiceError("Speaker store dimension mismatch")
+                self.speaker_embeddings = _validated_embeddings(payload.get("speakers", {}))
                 logger.info(f"Loaded {len(self.speaker_embeddings)} speaker embeddings")
             else:
                 logger.info("No existing embeddings file found, starting fresh")
                 self.speaker_embeddings = {}
         except Exception as e:
             logger.error(f"Failed to load embeddings: {str(e)}")
-            # Start with empty embeddings if load fails
-            self.speaker_embeddings = {}
+            raise SpeakerServiceError("Speaker embeddings failed validation") from e
     
     def _save_embeddings(self):
         """
@@ -125,26 +203,7 @@ class SpeakerService:
             SpeakerServiceError: If save operation fails
         """
         try:
-            # Ensure directory exists
-            self.embeddings_file.parent.mkdir(parents=True, exist_ok=True)
-
-            # Write atomically: write to temp file then rename
-            import tempfile
-            temp_fd, temp_path = tempfile.mkstemp(dir=str(self.embeddings_file.parent), prefix=self.embeddings_file.name, suffix='.tmp')
-            try:
-                with open(temp_fd, 'wb', closefd=True) as f:
-                    pickle.dump(self.speaker_embeddings, f)
-
-                # Replace target file atomically
-                temp_path_obj = Path(temp_path)
-                temp_path_obj.replace(self.embeddings_file)
-            finally:
-                # Ensure temp file removed if left behind
-                try:
-                    if Path(temp_path).exists():
-                        Path(temp_path).unlink()
-                except Exception:
-                    pass
+            _write_json_store(self.embeddings_file, _validated_embeddings(self.speaker_embeddings))
 
             logger.info(f"Saved {len(self.speaker_embeddings)} speaker embeddings")
 

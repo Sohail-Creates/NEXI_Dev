@@ -10,6 +10,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from shared.security import allowed_origins, InternalRouteAuthMiddleware
 from contextlib import asynccontextmanager
 
 # Setup logging
@@ -143,10 +144,14 @@ def create_app() -> FastAPI:
     # Add CORS middleware
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=allowed_origins(),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+    )
+    app.add_middleware(
+        InternalRouteAuthMiddleware,
+        protected_prefixes=("/api/v1/detect", "/api/v1/analyze", "/camera", "/stream", "/live", "/api/face-data"),
     )
     
     # Add Phase 1 security: Rate limiting middleware

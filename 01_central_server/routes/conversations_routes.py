@@ -14,6 +14,8 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 import logging
 import asyncio
+from shared.jwt_manager import require_user_ownership
+from shared.security import require_internal_service
 
 from conversations_persistence import (
     add_conversation,
@@ -55,6 +57,7 @@ async def store_user_conversation(
     }
     """
     try:
+        require_user_ownership(request, user_id)
         # Parse request body
         body = await request.json()
         
@@ -134,6 +137,7 @@ async def get_user_conversations_endpoint(
     }
     """
     try:
+        require_user_ownership(request, user_id)
         conversations = await asyncio.to_thread(get_user_conversations,
             user_id=user_id,
             limit=limit,
@@ -177,6 +181,7 @@ async def get_single_conversation(
                 status_code=404,
                 detail=f"Conversation '{conversation_id}' not found"
             )
+        require_user_ownership(request, conversation.get("user_id", ""))
         
         return conversation
         
@@ -205,6 +210,7 @@ async def delete_all_user_conversations(
     }
     """
     try:
+        require_user_ownership(request, user_id)
         success = await asyncio.to_thread(delete_user_conversations, user_id)
         
         if not success:
@@ -244,6 +250,7 @@ async def get_conversation_statistics(request: Request = None) -> Dict[str, Any]
     }
     """
     try:
+        await require_internal_service(request)
         stats = await asyncio.to_thread(get_conversation_stats)
         
         logger.info(f"[CONVERSATION] Stats retrieved: {stats.get('total_conversations')} total conversations")

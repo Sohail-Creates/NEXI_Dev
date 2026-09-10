@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from shared.security import allowed_origins, InternalRouteAuthMiddleware
 import asyncio
 import sys
 from pathlib import Path
@@ -41,10 +42,14 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=allowed_origins(),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+    )
+    app.add_middleware(
+        InternalRouteAuthMiddleware,
+        protected_prefixes=("/resources", "/camera", "/users/data/add_user"),
     )
     
     # Add Phase 1 security: Rate limiting middleware

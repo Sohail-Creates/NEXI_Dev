@@ -7,6 +7,7 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
+from shared.security import internal_service_headers
 
 from shared.config import ServiceConfig
 from shared.focus_mode import FocusModeClient
@@ -67,6 +68,8 @@ class LLMServiceClient:
 
         try:
             async with httpx.AsyncClient() as client:
+                if hasattr(client, "headers"):
+                    client.headers.update(internal_service_headers())
                 response = await asyncio.wait_for(
                     client.post(
                         f"{self.base_url}/api/v1/generate",

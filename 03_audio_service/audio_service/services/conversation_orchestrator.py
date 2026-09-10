@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 import aiohttp
+from shared.security import merge_internal_headers
 
 try:
     from shared.focus_mode import FocusModeClient
@@ -157,6 +158,7 @@ class ConversationOrchestrator:
         if not self.session:
             raise OrchestrationError("Session not started. Call start() first.")
         
+        kwargs["headers"] = merge_internal_headers(kwargs.get("headers"))
         for attempt in range(self.max_retries):
             try:
                 async with self.session.get(url, **kwargs) as resp:
@@ -187,6 +189,7 @@ class ConversationOrchestrator:
         if not self.session:
             raise OrchestrationError("Session not started. Call start() first.")
         
+        kwargs["headers"] = merge_internal_headers(kwargs.get("headers"))
         for attempt in range(self.max_retries):
             try:
                 async with self.session.post(
@@ -276,7 +279,8 @@ class ConversationOrchestrator:
             
             result = await self._post_with_retry(
                 f"{self.central_url}/api/v1/rag/query",
-                json_data=payload
+                json_data=payload,
+                headers=merge_internal_headers(user_id=user_id),
             )
             
             if result and result.get("success"):

@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional, Callable
 from enum import Enum
 from datetime import datetime, timedelta
 import aiohttp
+from shared.security import internal_service_headers
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -246,7 +247,8 @@ class ServiceConnector:
                     method,
                     url,
                     json=data,
-                    timeout=aiohttp.ClientTimeout(total=timeout)
+                    timeout=aiohttp.ClientTimeout(total=timeout),
+                    headers=internal_service_headers(),
                 ) as response:
                     if response.status == 200:
                         result = await response.json()

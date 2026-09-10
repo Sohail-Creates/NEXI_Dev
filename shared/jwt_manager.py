@@ -3,12 +3,20 @@ JWT Session Management with Token Timeouts
 Implements access tokens, refresh tokens, and session tokens with expiration
 """
 
-import jwt
+import os
+import secrets
+try:
+    import jwt
+    JWT_AVAILABLE = True
+except ImportError:  # pragma: no cover - exercised by the fail-closed test
+    jwt = None
+    JWT_AVAILABLE = False
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
+from fastapi import HTTPException, Request
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +35,12 @@ class TokenConfig:
     # Expiration times
     access_token_expire_minutes: int = 30  # 30 minutes
     refresh_token_expire_days: int = 7     # 7 days
-    session_token_expire_hours: int = 24   # 24 hours
+    session_token_expire_minutes: int = field(
+        default_factory=lambda: int(os.getenv("NEXI_SESSION_TOKEN_EXPIRE_MINUTES", "30"))
+    )
     
     # JWT settings
-    secret_key: str = "change-me-in-production"
+    secret_key: str = field(default_factory=lambda: os.getenv("NEXI_JWT_SECRET", "").strip())
     algorithm: str = "HS256"
     
     # Token validation
@@ -56,6 +66,12 @@ class JWTManager:
         self.config = config or TokenConfig()
         self.revoked_tokens: set[str] = set()  # Revoked token JTIs
         self.active_sessions: Dict[str, list[str]] = {}  # user_id -> [token_jti, ...]
+
+    def _require_configuration(self) -> None:
+        if not JWT_AVAILABLE or jwt is None:
+            raise RuntimeError("PyJWT is required; authentication fails closed")
+        if not self.config.secret_key:
+            raise RuntimeError("NEXI_JWT_SECRET is required for token operations")
     
     def create_access_token(
         self,
@@ -74,6 +90,7 @@ class JWTManager:
         Returns:
             Dictionary with token and expiration info
         """
+        self._require_configuration()
         now = datetime.now(timezone.utc)
         expires_in = expires_in_minutes or self.config.access_token_expire_minutes
         expiration = now + timedelta(minutes=expires_in)
@@ -124,6 +141,7 @@ class JWTManager:
         Returns:
             Dictionary with token and expiration info
         """
+        self._require_configuration()
         now = datetime.now(timezone.utc)
         expiration = now + timedelta(days=self.config.refresh_token_expire_days)
         
@@ -173,7 +191,8 @@ class JWTManager:
     def create_session_token(
         self,
         subject: str,
-        additional_claims: Optional[Dict[str, Any]] = None
+        additional_claims: Optional[Dict[str, Any]] = None,
+        expires_in_minutes: Optional[float] = None,
     ) -> Dict[str, str]:
         """
         Create a session token (for "stay logged in").
@@ -185,8 +204,14 @@ class JWTManager:
         Returns:
             Dictionary with token and expiration info
         """
+        self._require_configuration()
         now = datetime.now(timezone.utc)
-        expiration = now + timedelta(hours=self.config.session_token_expire_hours)
+        lifetime = (
+            self.config.session_token_expire_minutes
+            if expires_in_minutes is None
+            else expires_in_minutes
+        )
+        expiration = now + timedelta(minutes=lifetime)
         
         import uuid
         claims = {
@@ -207,12 +232,12 @@ class JWTManager:
             algorithm=self.config.algorithm
         )
         
-        logger.info(f"JWT: Created session token for {subject}, expires in {self.config.session_token_expire_hours} hours")
+        logger.info("JWT: Created session token for %s, expires in %s minutes", subject, lifetime)
         
         return {
             "token": token,
             "type": "bearer",
-            "expires_in": self.config.session_token_expire_hours * 60 * 60,  # In seconds
+            "expires_in": int(lifetime * 60),
             "expires_at": expiration.isoformat(),
             "jti": claims["jti"]
         }
@@ -231,6 +256,7 @@ class JWTManager:
         Raises:
             jwt.InvalidTokenError: If token is invalid or expired
         """
+        self._require_configuration()
         try:
             payload = jwt.decode(
                 token,
@@ -373,6 +399,10 @@ class TokenValidator:
             return self.jwt_manager.verify_token(token, token_type=TokenType.ACCESS.value)
         except jwt.InvalidTokenError as e:
             raise ValueError(f"Invalid access token: {e}")
+
+    def validate_session_token(self, token: str) -> Dict[str, Any]:
+        """Validate a user session token and return its immutable claims."""
+        return self.jwt_manager.verify_token(token, token_type=TokenType.SESSION.value)
     
     async def validate_refresh_token(self, token: str) -> Dict[str, Any]:
         """Validate refresh token"""
@@ -392,3 +422,55 @@ __all__ = [
     "JWTManager",
     "TokenValidator"
 ]
+
+
+_jwt_manager: Optional[JWTManager] = None
+
+
+def get_jwt_manager() -> JWTManager:
+    global _jwt_manager
+    if _jwt_manager is None:
+        _jwt_manager = JWTManager()
+    return _jwt_manager
+
+
+def get_token_validator() -> TokenValidator:
+    return TokenValidator(get_jwt_manager())
+
+
+def bearer_token_from_request(request: Request) -> str:
+    header = request.headers.get("Authorization", "")
+    if not header.startswith("Bearer ") or not header[7:].strip():
+        raise HTTPException(status_code=401, detail="Bearer session token required")
+    return header[7:].strip()
+
+
+def require_session_claims(request: Request) -> Dict[str, Any]:
+    """Validate only at an external boundary; internal calls use service trust."""
+    from shared.security import auth_enforcement_enabled, is_internal_request, trusted_internal_user
+
+    if not auth_enforcement_enabled():
+        return {"sub": "auth-disabled", "type": TokenType.SESSION.value, "disabled": True}
+
+    if is_internal_request(request):
+        user_id = trusted_internal_user(request)
+        if not user_id:
+            raise HTTPException(status_code=401, detail="Trusted internal user context required")
+        return {"sub": user_id, "type": TokenType.SESSION.value, "internal": True}
+    try:
+        return get_token_validator().validate_session_token(bearer_token_from_request(request))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Invalid or expired session token") from exc
+
+
+def require_user_ownership(request: Request, user_id: str) -> Dict[str, Any]:
+    from shared.security import auth_enforcement_enabled
+    if not auth_enforcement_enabled():
+        return {"sub": user_id, "type": TokenType.SESSION.value, "disabled": True}
+    claims = require_session_claims(request)
+    subject = str(claims.get("sub", ""))
+    if not subject or not secrets.compare_digest(subject, user_id):
+        raise HTTPException(status_code=403, detail="Token does not own requested user")
+    return claims
