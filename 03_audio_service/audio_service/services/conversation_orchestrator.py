@@ -89,7 +89,7 @@ class ConversationOrchestrator:
         audio_service_url: str = "http://localhost:8002",
         vision_service_url: str = "http://localhost:8001",
         teachme_service_url: str = "http://localhost:8005",
-        llm_service_url: str = "http://localhost:8006",
+        central_service_url: str = "http://localhost:8000",
         tts_service_url: str = "http://localhost:8003",
         timeout: int = 30,
         max_retries: int = 3,
@@ -103,7 +103,7 @@ class ConversationOrchestrator:
             audio_service_url: Audio service endpoint
             vision_service_url: Vision service endpoint
             teachme_service_url: Knowledge service endpoint
-            llm_service_url: LLM service endpoint
+            central_service_url: Central restricted-RAG endpoint
             tts_service_url: TTS service endpoint
             timeout: Request timeout in seconds
             max_retries: Number of retry attempts for failed requests
@@ -112,7 +112,7 @@ class ConversationOrchestrator:
         self.audio_url = audio_service_url
         self.vision_url = vision_service_url
         self.teachme_url = teachme_service_url
-        self.llm_url = llm_service_url
+        self.central_url = central_service_url
         self.tts_url = tts_service_url
         self.timeout = aiohttp.ClientTimeout(total=timeout)
         self.max_retries = max_retries
@@ -127,7 +127,7 @@ class ConversationOrchestrator:
         
         logger.info(
             f"ConversationOrchestrator initialized: "
-            f"audio={audio_service_url}, llm={llm_service_url}, tts={tts_service_url}"
+            f"audio={audio_service_url}, rag={central_service_url}, tts={tts_service_url}"
         )
     
     async def start(self):
@@ -272,22 +272,15 @@ class ConversationOrchestrator:
             await self.focus_mode_client.async_defer_if_needed("conversation")
             logger.info(f"Calling LLM for user {user_id}: {user_text[:50]}...")
             
-            payload = {
-                "text": user_text,
-                "user_id": user_id,
-                "language": language
-            }
-            
-            if context:
-                payload["context"] = context
+            payload = {"query": user_text}
             
             result = await self._post_with_retry(
-                f"{self.llm_url}/api/v1/generate",
+                f"{self.central_url}/api/v1/rag/query",
                 json_data=payload
             )
             
             if result and result.get("success"):
-                response_text = result.get("text", "")
+                response_text = result.get("response", "")
                 logger.info(f"LLM response: {response_text[:50]}...")
                 return response_text
             else:

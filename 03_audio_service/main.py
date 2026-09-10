@@ -230,7 +230,7 @@ async def lifespan(app: FastAPI):
             audio_service_url="http://localhost:8002",
             vision_service_url="http://localhost:8001",
             teachme_service_url="http://localhost:8005",
-            llm_service_url="http://localhost:8006",
+            central_service_url="http://localhost:8000",
             tts_service_url="http://localhost:8003"
         )
         

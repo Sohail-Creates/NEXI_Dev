@@ -4,8 +4,7 @@ from datetime import datetime
 import requests
 import logging
 import time
-import hashlib
-from .config import vision_config, search_index_config
+from .config import vision_config
 import asyncio
 
 # Vision Service Connector with Circuit Breaker
@@ -17,15 +16,6 @@ try:
     HAS_AIOHTTP = True
 except ImportError:
     HAS_AIOHTTP = False
-
-# Try to import numpy for embedding generation
-try:
-    import numpy as np
-    HAS_NUMPY = True
-except ImportError:
-    HAS_NUMPY = False
-    logger_temp = logging.getLogger(__name__)
-    logger_temp.warning("Numpy not available - embeddings will be None")
 
 # Setup logging
 logger = logging.getLogger(__name__)
@@ -456,10 +446,7 @@ class ObjectProcessor:
     
     def generate_embedding(self, object_data, attributes: Dict[str, Any]) -> Optional[List[float]]:
         """
-        Generate embedding vector for an object or fact (Phase 2 optimization).
-        
-        Strategy: Create deterministic embedding from object/fact attributes.
-        This enables fast similarity search while being independent of external ML models.
+        Generate a normalized semantic embedding for an object or fact.
         
         Args:
             object_data: Object or Fact data
@@ -468,93 +455,15 @@ class ObjectProcessor:
         Returns:
             List of floats representing the embedding, or None if numpy not available
         """
-        if not HAS_NUMPY:
-            return None
-        
         try:
-            dimension = search_index_config.INDEX_DIMENSION  # Usually 128
-            
-            # Create feature vector from object attributes
-            features = []
-            
-            # 1. Extract name/identifier (works for both ObjectData and FactData)
-            identifier = ""
-            if hasattr(object_data, 'name'):
-                identifier = object_data.name
-            elif hasattr(object_data, 'subject'):
-                # For FactData
-                identifier = f"{object_data.subject}_{object_data.predicate}_{object_data.object}"
-            else:
-                identifier = str(object_data)
-            
-            name_hash = hashlib.md5(identifier.lower().encode()).digest()
-            name_features = [float(b) / 256.0 for b in name_hash[:32]]  # Use first 32 bytes
-            features.extend(name_features[:32])
-            
-            # 2. Category/Type encoding
-            category = ""
-            if hasattr(object_data, 'category'):
-                category = attributes.get('detected_class', object_data.category or 'unknown')
-            else:
-                category = attributes.get('predicate', 'fact')
-            
-            cat_hash = hashlib.md5(category.lower().encode()).digest()
-            cat_features = [float(b) / 256.0 for b in cat_hash[:32]]
-            features.extend(cat_features[:32])
-            
-            # 3. Attribute-based features
-            color = attributes.get('color', '').lower()
-            shape = attributes.get('shape', '').lower()
-            material = attributes.get('material', '').lower()
-            
-            # Convert text attributes to numeric features
-            attr_text = f"{color} {shape} {material}".lower()
-            attr_hash = hashlib.md5(attr_text.encode()).digest()
-            attr_features = [float(b) / 256.0 for b in attr_hash[:32]]
-            features.extend(attr_features[:32])
-            
-            # 4. Confidence-based features
-            confidence = attributes.get('confidence', 0.5)
-            detected = 1.0 if attributes.get('vision_detected') else 0.5
-            features.extend([confidence, detected])
-            
-            # 5. Confidence threshold feature
-            confidence_threshold = attributes.get('confidence', 0.0)
-            features.append(min(confidence_threshold, 1.0))
-            
-            # Pad to exact dimension
-            if len(features) < dimension:
-                # Generate padding from multiple hash iterations
-                # Use identifier (works for both ObjectData and FactData)
-                padding_seed = hashlib.md5(identifier.encode()).digest()
-                padding = []
-                
-                # Generate enough padding bytes
-                current_hash = padding_seed
-                while len(padding) < (dimension - len(features)):
-                    padding.extend([float(b) / 256.0 for b in current_hash])
-                    # Generate next hash for more padding bytes if needed
-                    current_hash = hashlib.md5(current_hash).digest()
-                
-                # Add exactly the padding needed
-                features.extend(padding[:dimension - len(features)])
-            else:
-                features = features[:dimension]
-            
-            # Normalize the embedding to unit vector (cosine similarity)
-            embedding_array = np.array(features, dtype=np.float32)
-            norm = np.linalg.norm(embedding_array)
-            if norm > 0:
-                embedding_array = embedding_array / norm
-            
-            embedding_list = embedding_array.tolist()
-            logger.debug(f"Generated embedding for {identifier} (dimension: {len(embedding_list)})")
-            
-            return embedding_list
+            from .services.embedding_client import EmbeddingClient
+
+            item_type = "object" if hasattr(object_data, "name") else "fact"
+            return EmbeddingClient().embed(item_type, object_data)
             
         except Exception as e:
-            logger.warning(f"Failed to generate embedding: {e}")
-            return None
+            logger.error(f"Failed to generate semantic embedding: {e}")
+            raise
     
     def _initialize_categories(self) -> Dict[str, List[str]]:
         """Initialize object category mapping"""

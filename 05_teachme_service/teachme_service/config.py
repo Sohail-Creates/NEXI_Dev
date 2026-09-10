@@ -4,6 +4,7 @@
 import os
 from typing import Optional
 from dotenv import load_dotenv  # type: ignore
+from shared.semantic_embeddings import SEMANTIC_EMBEDDING_DIMENSION
 
 # Load environment variables from .env file
 load_dotenv()
@@ -60,7 +61,7 @@ class SearchIndexConfig:
     """Embedding search index settings"""
     
     USE_FAISS: bool = os.getenv("USE_FAISS", "true").lower() == "true"
-    INDEX_DIMENSION: int = int(os.getenv("INDEX_DIMENSION", "768"))
+    INDEX_DIMENSION: int = SEMANTIC_EMBEDDING_DIMENSION
     INDEX_METRIC: str = os.getenv("INDEX_METRIC", "cosine")
     
     # Fallback to linear search if index fails

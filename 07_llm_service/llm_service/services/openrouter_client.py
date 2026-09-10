@@ -40,7 +40,6 @@ class OpenRouterClient:
     async def generate(
         self,
         prompt: str,
-        system_prompt: str = "",
         max_tokens: int = 128,
         temperature: float = 0.6,
         timeout: Optional[float] = None,
@@ -50,7 +49,6 @@ class OpenRouterClient:
         
         Args:
             prompt: User query/prompt
-            system_prompt: System instructions
             max_tokens: Max response tokens
             temperature: Sampling temperature
             timeout: Request timeout
@@ -71,10 +69,7 @@ class OpenRouterClient:
             url = f"{self.base_url}/chat/completions"
             
             # Build messages for chat/completions format
-            messages = []
-            if system_prompt:
-                messages.append({"role": "system", "content": system_prompt})
-            messages.append({"role": "user", "content": prompt})
+            messages = [{"role": "user", "content": prompt}]
             
             payload = {
                 "model": self.model,

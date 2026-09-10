@@ -8,9 +8,9 @@ Exposes TeachMe knowledge base functionality through Central Server API
 """
 
 import logging
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal, Union
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from teachme_connector import get_teachme_connector
 
@@ -30,15 +30,26 @@ class ObjectAttribute(BaseModel):
     value: Any
 
 
-class LearnObjectRequest(BaseModel):
-    """Learn object request"""
+class ObjectData(BaseModel):
     name: str
-    category: str
-    attributes: Dict[str, Any]
-    embedding: List[float]
-    confidence: float = 0.95
-    tags: Optional[List[str]] = None
-    source: Optional[str] = None
+    attributes: Dict[str, Any] = Field(default_factory=dict)
+    category: Optional[str] = None
+    description: Optional[str] = None
+
+
+class FactData(BaseModel):
+    subject: str
+    predicate: str
+    object: str
+    context: Dict[str, Any] = Field(default_factory=dict)
+
+
+class LearningRequest(BaseModel):
+    """Mirror TeachMe's typed public learning contract."""
+    type: Literal["object", "fact"]
+    data: Union[ObjectData, FactData]
+    tags: List[str] = Field(default_factory=list)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
 
 
 class SearchRequest(BaseModel):
@@ -49,7 +60,7 @@ class SearchRequest(BaseModel):
 
 class EmbeddingSearchRequest(BaseModel):
     """Embedding-based search request"""
-    embedding: List[float]
+    query: str = Field(..., min_length=1, max_length=200)
     k: int = 5
     threshold: float = 0.3
 
@@ -131,17 +142,14 @@ async def teachme_status():
 # ============================================================================
 
 @router.post("/learn")
-async def learn_object(request: LearnObjectRequest):
+async def learn_object(request: LearningRequest):
     """
-    Learn a new object in TeachMe knowledge base.
-    Typically called after Vision Service provides embedding.
+    Learn a typed object or fact; TeachMe owns semantic embedding generation.
     
     Request:
     {
-        "name": "robot_arm",
-        "category": "actuator",
-        "attributes": {"material": "aluminum", "dof": 6},
-        "embedding": [0.1, 0.2, ..., 0.128],
+        "type": "object",
+        "data": {"name": "robot_arm", "category": "actuator", "attributes": {}},
         "confidence": 0.95,
         "tags": ["metal", "movable"],
         "source": "vision_service"
@@ -151,34 +159,23 @@ async def learn_object(request: LearnObjectRequest):
     {
         "success": true,
         "item_id": "550e8400-...",
-        "object_name": "robot_arm",
+        "type": "object",
         "stored_at": "2026-02-22T...",
         "fallback": false
     }
     """
     try:
-        # Validate embedding dimension
-        if len(request.embedding) != 128:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Embedding must be 128-dimensional, got {len(request.embedding)}"
-            )
-        
-        # Validate confidence score
-        if not 0.0 <= request.confidence <= 1.0:
-            raise HTTPException(
-                status_code=400,
-                detail="Confidence must be between 0.0 and 1.0"
-            )
-        
         connector = get_teachme_connector()
-        
-        result = await connector.learn_object(
-            name=request.name,
-            category=request.category,
-            attributes=request.attributes,
-            embedding=request.embedding,
-            confidence=request.confidence
+        if request.type == "object" and not isinstance(request.data, ObjectData):
+            raise HTTPException(status_code=422, detail="Object learning requires object data")
+        if request.type == "fact" and not isinstance(request.data, FactData):
+            raise HTTPException(status_code=422, detail="Fact learning requires fact data")
+
+        result = await connector.learn_item(
+            item_type=request.type,
+            data=request.data.model_dump(mode="json"),
+            confidence=request.confidence,
+            tags=request.tags,
         )
         
         if result is None:
@@ -190,7 +187,7 @@ async def learn_object(request: LearnObjectRequest):
         return {
             "success": result.get("success", bool(result.get("item_id"))),
             "item_id": result.get("item_id"),
-            "object_name": request.name,
+            "type": request.type,
             "stored_at": result.get("timestamp"),
             "fallback": result.get("fallback", False)
         }
@@ -290,24 +287,17 @@ async def search_by_embedding(request: EmbeddingSearchRequest):
     }
     """
     try:
-        # Validate embedding
-        if len(request.embedding) != 128:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Embedding must be 128-dimensional, got {len(request.embedding)}"
-            )
-        
         connector = get_teachme_connector()
         
         result = await connector.search_by_embedding(
-            embedding=request.embedding,
+            query=request.query,
             k=request.k,
             threshold=request.threshold
         )
         
         if result is None:
             return {
-                "query_embedding_size": 128,
+                "query": request.query,
                 "k": request.k,
                 "results": [],
                 "fallback": True,
@@ -315,7 +305,7 @@ async def search_by_embedding(request: EmbeddingSearchRequest):
             }
         
         return {
-            "query_embedding_size": 128,
+            "query": request.query,
             "k": request.k,
             "results": result.get("results", []),
             "fallback": result.get("fallback", False)

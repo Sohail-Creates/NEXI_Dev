@@ -6,8 +6,19 @@ import hashlib
 import json
 from pathlib import Path
 import sqlite3
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from teachme_service.sqlite_store import initialize
 from teachme_service.models import KnowledgeItem, ObjectData, FactData
+from shared.semantic_embeddings import (
+    SEMANTIC_EMBEDDING_DIMENSION,
+    embed_text,
+    knowledge_text,
+)
 
 
 def migrate(source, database):
@@ -64,14 +75,44 @@ def export(database, destination):
     print(f"EXPORTED knowledge={len(data['storage'])}")
 
 
+def reembed(database):
+    """Idempotently replace missing/legacy vectors with configured semantic vectors."""
+    initialize(database)
+    examined = updated = 0
+    with closing(sqlite3.connect(database, timeout=30)) as conn, conn:
+        conn.execute("BEGIN IMMEDIATE")
+        rows = list(conn.execute("SELECT id, record FROM knowledge ORDER BY rowid"))
+        for item_id, raw_record in rows:
+            record = json.loads(raw_record)
+            KnowledgeItem.model_validate(record)
+            examined += 1
+            vector = embed_text(knowledge_text(record["type"], record["data"]))
+            existing = record.get("embedding")
+            if existing is not None and len(existing) == SEMANTIC_EMBEDDING_DIMENSION and existing == vector:
+                continue
+            record["embedding"] = vector
+            conn.execute(
+                "UPDATE knowledge SET record=? WHERE id=?",
+                (json.dumps(record, ensure_ascii=False, allow_nan=False), item_id),
+            )
+            updated += 1
+    print(
+        f"REEMBED examined={examined} updated={updated} unchanged={examined - updated} "
+        f"dimension={SEMANTIC_EMBEDDING_DIMENSION}"
+    )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, default=Path(__file__).parent / "knowledge_data.json")
     parser.add_argument("--database", type=Path)
     parser.add_argument("--export", type=Path)
+    parser.add_argument("--reembed", action="store_true")
     args = parser.parse_args()
     database = args.database or args.source.with_suffix(".sqlite3")
-    if args.export:
+    if args.reembed:
+        reembed(database)
+    elif args.export:
         export(database, args.export)
     else:
         migrate(args.source, database)

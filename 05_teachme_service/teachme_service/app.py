@@ -1,3 +1,8 @@
+import sys
+from pathlib import Path
+
+root_dir = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(root_dir))
 
 from fastapi import FastAPI, HTTPException, status, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,9 +12,7 @@ from .knowledge_base import knowledge_base
 from .object_processor import object_processor
 from typing import List, Optional, Dict, Any
 import logging
-import sys
 import requests
-from pathlib import Path
 from .config import server_config, vision_config
 import time
 import os
@@ -21,8 +24,6 @@ import secrets
 import json
 
 # Import Phase 1 security: Rate limiting
-root_dir = Path(__file__).parent.parent.parent
-sys.path.insert(0, str(root_dir))
 from shared.rate_limiter import create_rate_limit_middleware
 
 # NEW: Import resilient systems
@@ -251,6 +252,11 @@ rotation_policy = QueryRotationPolicy(storage_dir=history_store.storage_dir)
 async def startup_event():
     # ... existing code ...
     rotation_policy.run_cleanup()
+
+    # Readiness includes the local semantic model: do not defer a potentially
+    # expensive or missing-artifact failure to the first user request.
+    await asyncio.to_thread(knowledge_base.embedding_client.embed_query, "NEXI readiness")
+    logger.info(" Semantic embedding model initialized")
     
     # NEW: Initialize resilient systems
     try:
@@ -310,7 +316,7 @@ async def root():
         "features": {
             "object_learning": " Vision-powered",
             "fact_learning": " Enabled",
-            "embeddings": " 128-dim semantic search",
+            "embeddings": f" {search_index_config.INDEX_DIMENSION}-dim semantic search",
             "vision_service": " Async integration",
             "security": " Rate limiting + CORS",
             "persistence": " Atomic saves + backups"
@@ -690,7 +696,7 @@ async def search_by_embedding(
         # Generate embedding for query object
         from .models import ObjectData
         query_obj = ObjectData(name=query_object_name, category="query")
-        query_embedding = object_processor.generate_embedding(query_obj, query_obj.attributes)
+        query_embedding = knowledge_base.embedding_client.embed_query(query_object_name)
         
         if query_embedding is None:
             raise HTTPException(
@@ -712,6 +718,7 @@ async def search_by_embedding(
                 "id": item.id,
                 "type": item.type.value,
                 "name": item.data.name if hasattr(item.data, 'name') else str(item.data),
+                "data": item.data.model_dump(mode="json"),
                 "similarity": round(similarity, 4),
                 "confidence": item.confidence,
                 "tags": item.tags

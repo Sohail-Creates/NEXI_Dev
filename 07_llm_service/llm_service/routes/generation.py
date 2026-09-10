@@ -2,17 +2,27 @@
 
 import logging
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 logger = logging.getLogger(__name__)
 
 class GenerationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     query: str = Field(..., min_length=1)
-    system_prompt: Optional[str] = ""
-    max_tokens: Optional[int] = 128
-    temperature: Optional[float] = 0.6
-    language: Optional[str] = "en"
+    max_tokens: int = 128
+    temperature: float = 0.2
+    language: str = "en"
+
+    @field_validator("max_tokens", mode="before")
+    @classmethod
+    def clamp_max_tokens(cls, value):
+        return max(1, min(512, int(value)))
+
+    @field_validator("temperature", mode="before")
+    @classmethod
+    def clamp_temperature(cls, value):
+        return max(0.0, min(1.5, float(value)))
 
 def create_generation_routes(openrouter_client):
     router = APIRouter(prefix="/api/v1")
@@ -26,7 +36,6 @@ def create_generation_routes(openrouter_client):
         try:
             text, metadata, success = await openrouter_client.generate(
                 prompt=req.query,
-                system_prompt=req.system_prompt,
                 max_tokens=req.max_tokens,
                 temperature=req.temperature,
             )

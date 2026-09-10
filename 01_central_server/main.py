@@ -6,12 +6,16 @@ import asyncio
 import sys
 from pathlib import Path
 
+# Make shared modules available before Phase 4 route modules are imported.
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from sqlite_store import read_records, connect
 from starlette.responses import JSONResponse
 from routes import user_router
 from routes.conversations_routes import router as conversations_router
 from camera_routes import router as camera_router
 from teachme_routes import router as teachme_router
+from restricted_rag import router as restricted_rag_router
 from resource_routes import router as resource_router
 from teachme_connector import init_teachme_connector
 from service_config import get_config
@@ -29,7 +33,6 @@ async def daily_sync_task():
         await asyncio.sleep(86400) # 24 hours
 
 # Import Phase 1 security modules (from shared/)
-sys.path.insert(0, str(Path(__file__).parent.parent))
 from shared.rate_limiter import create_rate_limit_middleware
 
 
@@ -81,6 +84,7 @@ def create_app() -> FastAPI:
     app.include_router(conversations_router)
     app.include_router(camera_router)
     app.include_router(teachme_router)
+    app.include_router(restricted_rag_router)
     app.include_router(resource_router)
     
     # Startup event for TeachMe connector initialization

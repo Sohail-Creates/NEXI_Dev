@@ -13,8 +13,10 @@ import json
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 import aiohttp
+from urllib.parse import urlencode
 from enum import Enum
 from collections import deque
+from shared.semantic_embeddings import SEMANTIC_EMBEDDING_DIMENSION
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +102,7 @@ class TeachMeConnector:
     def __init__(self, base_url: str = "http://localhost:8004", config: Optional[Dict] = None):
         self.base_url = base_url
         self.config = config or {}
+        self.embedding_dimension = SEMANTIC_EMBEDDING_DIMENSION
         
         # Extract config
         self.max_retries = self.config.get("max_retries", 3)
@@ -155,8 +158,8 @@ class TeachMeConnector:
         name: str,
         category: str,
         attributes: Dict[str, Any],
-        embedding: List[float],
-        confidence: float = 0.95
+        confidence: float = 0.95,
+        tags: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Learn an object in TeachMe knowledge base.
@@ -165,7 +168,6 @@ class TeachMeConnector:
             name: Object name
             category: Object category
             attributes: Object attributes dict
-            embedding: 128-dimensional embedding vector
             confidence: Confidence score (0.0-1.0)
         
         Returns:
@@ -174,7 +176,7 @@ class TeachMeConnector:
         request_id = f"learn_{name}_{datetime.utcnow().timestamp()}"
         
         # Try to enqueue
-        if not await self.queue_manager.enqueue(request_id, "/knowledge/learn"):
+        if not await self.queue_manager.enqueue(request_id, "/learn"):
             logger.warning(f"TeachMe queue full, rejecting learn request for {name}")
             return {"success": False, "error": "Service queue full", "fallback": True}
         
@@ -182,14 +184,13 @@ class TeachMeConnector:
             self.queue_manager.mark_processing()
             
             payload = {
-                "name": name,
-                "category": category,
-                "attributes": attributes,
-                "embedding": embedding,
-                "confidence": confidence
+                "type": "object",
+                "data": {"name": name, "category": category, "attributes": attributes},
+                "tags": tags or [],
+                "confidence": confidence,
             }
             
-            response = await self.request("POST", "/knowledge/learn", payload)
+            response = await self.request("POST", "/learn", payload)
             
             if response:
                 logger.info(f"TeachMe: Learned object '{name}'")
@@ -198,6 +199,27 @@ class TeachMeConnector:
                 logger.error(f"TeachMe: Failed to learn object '{name}'")
                 return {"success": False, "error": "Service request failed"}
         
+        finally:
+            self.queue_manager.mark_completed()
+
+    async def learn_item(
+        self,
+        item_type: str,
+        data: Dict[str, Any],
+        tags: Optional[List[str]] = None,
+        confidence: float = 1.0,
+    ) -> Optional[Dict[str, Any]]:
+        """Send TeachMe's typed object/fact contract without reshaping it."""
+        request_id = f"learn_{item_type}_{datetime.utcnow().timestamp()}"
+        if not await self.queue_manager.enqueue(request_id, "/learn"):
+            return {"success": False, "error": "Service queue full", "fallback": True}
+        try:
+            self.queue_manager.mark_processing()
+            return await self.request(
+                "POST",
+                "/learn",
+                {"type": item_type, "data": data, "tags": tags or [], "confidence": confidence},
+            )
         finally:
             self.queue_manager.mark_completed()
     
@@ -235,7 +257,7 @@ class TeachMeConnector:
     
     async def search_by_embedding(
         self,
-        embedding: List[float],
+        query: str,
         k: int = 5,
         threshold: float = 0.3
     ) -> Optional[Dict[str, Any]]:
@@ -243,7 +265,7 @@ class TeachMeConnector:
         Semantic similarity search by embedding.
         
         Args:
-            embedding: Query embedding vector
+            query: Natural-language query to embed in TeachMe
             k: Number of results
             threshold: Similarity threshold
         
@@ -259,13 +281,9 @@ class TeachMeConnector:
         try:
             self.queue_manager.mark_processing()
             
-            payload = {
-                "embedding": embedding,
-                "k": k,
-                "threshold": threshold
-            }
-            
-            response = await self.request("POST", "/knowledge/search/embedding", payload)
+            params = urlencode({"query_object_name": query, "top_k": k, "similarity_threshold": threshold})
+            endpoint = f"/knowledge/search/embedding?{params}"
+            response = await self.request("POST", endpoint)
             return response or {"results": []}
         
         finally:

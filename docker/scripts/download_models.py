@@ -5,6 +5,17 @@ import os
 import sys
 from pathlib import Path
 
+# The script lives at ``docker/scripts`` in source and ``/app/scripts`` in
+# deployment.  Locate the application root explicitly so the embedding model
+# identifier remains sourced from the same shared module as Central/TeachMe.
+for candidate_root in (
+    Path(__file__).resolve().parents[1],
+    Path(__file__).resolve().parents[2],
+):
+    if (candidate_root / "shared").is_dir():
+        sys.path.insert(0, str(candidate_root))
+        break
+
 MODELS_DIR = Path("/app/models")
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -28,6 +39,17 @@ def download_siglip2():
     except Exception as e:
         print(f"⚠ SigLIP2 download failed: {e}")
 
+def download_text_embeddings():
+    """Provision the shared Phase 4 semantic model for offline runtime use."""
+    try:
+        from sentence_transformers import SentenceTransformer
+        from shared.semantic_embeddings import SEMANTIC_EMBEDDING_MODEL
+
+        SentenceTransformer(SEMANTIC_EMBEDDING_MODEL)
+        print("TeachMe semantic embedding model downloaded")
+    except Exception as e:
+        print(f"TeachMe semantic embedding download failed: {e}")
+
 def download_yolo():
     """Download YOLOv8n."""
     try:
@@ -50,6 +72,7 @@ if __name__ == "__main__":
     print("Downloading NEXI models...")
     download_piper_jenny()
     download_siglip2()
+    download_text_embeddings()
     download_yolo()
     download_deepface()
     print("Model download complete.")

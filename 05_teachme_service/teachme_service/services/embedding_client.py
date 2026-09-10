@@ -1,15 +1,20 @@
-"""Embedding client boundary retained for Phase 4 integration."""
+"""TeachMe semantic embedding boundary."""
 
 from ..config import search_index_config
+from shared.semantic_embeddings import embed_text, knowledge_text
 
 
 class EmbeddingClient:
-    """Expose configuration without replacing the current embedding generator.
-
-    The knowledge base only constructs this client. Semantic embedding generation
-    and its caller contract remain unimplemented until Phase 4 (NEXI-018).
-    """
+    """Generate normalized embeddings using the shared configured model."""
 
     def __init__(self):
         self.dimension = search_index_config.INDEX_DIMENSION
-        self.available = False
+        self.available = True
+
+    def embed(self, item_type: str, data) -> list[float]:
+        if hasattr(data, "model_dump"):
+            data = data.model_dump(mode="json")
+        return embed_text(knowledge_text(item_type, data))
+
+    def embed_query(self, query: str) -> list[float]:
+        return embed_text(query)
