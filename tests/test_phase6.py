@@ -145,7 +145,7 @@ def test_identity_contract_uses_user_id_end_to_end(monkeypatch) -> None:
     central_main.app.state.db = {"users": []}
     with TestClient(central_main.app) as central:
         response = central.post(
-            "/users/data/add_user",
+            "/users",
             headers={"X-NEXI-Service-Token": SERVICE_TOKEN},
             json={"name": "Phase Six User", "voice_embeddings": [[0.1]], "face_embeddings": [[0.2]]},
         )

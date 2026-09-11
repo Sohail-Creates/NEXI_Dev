@@ -620,7 +620,7 @@ class EnrollmentService:
                         "enrollment_timestamp": enrollment_data.get("enrollment_timestamp"),
                     }
 
-                    add_resp: httpx.Response = await client.post(f"{base_url}/users/data/add_user", json=payload)
+                    add_resp: httpx.Response = await client.post(f"{base_url}/users", json=payload)
                     if add_resp.status_code == 200:
                         results["synced"] += 1
                     else:

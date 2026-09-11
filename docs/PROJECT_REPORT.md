@@ -2159,7 +2159,7 @@ See section 4.1 for comprehensive environment variable list. Critical variables:
 
 **Central Server (8000):**
 - GET /health
-- POST /users/add-embeddings (new user registration)
+- POST /users/register-with-embeddings (new user registration)
 - GET /users/list (all users)
 - GET /users/{user_id} (user profile)
 - DELETE /users/{user_id}

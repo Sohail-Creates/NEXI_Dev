@@ -668,7 +668,7 @@ Collected: 5 voice samples with embeddings
 
 ```
 Enrollment → Central Server:
-  POST /users/add-embeddings
+  POST /users/register-with-embeddings
   {
     "user_name": "fatima",
     "age": 28,

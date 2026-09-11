@@ -1904,30 +1904,30 @@ def get_user_profile(user_id: str) -> Optional[Dict]:
         return None
 
 def get_conversation_history(user_id: str, max_turns: int = 5) -> List[Dict]:
-    """Fetch conversation history from Central Server with compatibility fallback.
+    """Fetch durable conversations and adapt them to the harness's turn shape.
     
     ENHANCED: Retrieves MORE context (10 turns for personalization).
     """
     try:
         # Preferred endpoint (if available in deployed build)
         response = requests.get(
-            f"{ServiceConfig.CENTRAL_SERVER}/users/{user_id}/conversation-history",
+            f"{ServiceConfig.CENTRAL_SERVER}/users/{user_id}/conversations",
             params={"limit": max_turns},
             timeout=10
         )
         if response.status_code == 200:
             data = response.json()
-            return data.get('history', [])
+            conversations = data.get('conversations', [])
+            return [
+                {
+                    "user": item.get("user_message", ""),
+                    "assistant": item.get("assistant_response", ""),
+                    "timestamp": item.get("timestamp"),
+                }
+                for item in conversations
+            ]
 
-        # Backward-compatible fallback: read conversation_history from user profile
-        user_profile = get_user_profile(user_id)
-        if not user_profile:
-            return []
-
-        history = user_profile.get("conversation_history", [])
-        if not isinstance(history, list):
-            return []
-        return history[-max_turns:]
+        return []
     except Exception as e:
         print_info(f"No conversation history available: {str(e)[:30]}")
         return []
@@ -2479,7 +2479,7 @@ def menu_new_user_enrollment():
             payload["relation"] = relation
         
         response = requests.post(
-            f"{ServiceConfig.CENTRAL_SERVER}/users/add-embeddings",
+            f"{ServiceConfig.CENTRAL_SERVER}/users/register-with-embeddings",
             json=payload,
             timeout=30
         )

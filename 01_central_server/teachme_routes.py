@@ -203,7 +203,8 @@ async def learn_object(request: LearningRequest):
 # SEARCH ENDPOINTS
 # ============================================================================
 
-@router.get("/search/{query}")
+@router.get("/search/{query}", include_in_schema=False, deprecated=True)
+@router.get("/search/by-text/{query}")
 async def search_by_name(
     query: str,
     limit: int = Query(10, ge=1, le=100)
@@ -258,7 +259,8 @@ async def search_by_name(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/search/embedding")
+@router.post("/search/embedding", include_in_schema=False, deprecated=True)
+@router.post("/search/by-embedding")
 async def search_by_embedding(request: EmbeddingSearchRequest):
     """
     Search objects by semantic similarity using embedding.

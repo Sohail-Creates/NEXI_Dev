@@ -70,13 +70,13 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-  /users/data/add_user:
+  /users:
     post:
       tags:
       - User Management
       summary: Add User
-      description: Register new user
-      operationId: add_user_users_data_add_user_post
+      description: Create a user record through the canonical users collection.
+      operationId: add_user_users_post
       requestBody:
         content:
           application/json:
@@ -471,83 +471,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-  /users/{user_id}/conversation-history:
-    get:
-      tags:
-      - User Management
-      summary: Get User Conversation History
-      description: Get latest conversation turns for a user.
-      operationId: get_user_conversation_history_users__user_id__conversation_history_get
-      parameters:
-      - name: user_id
-        in: path
-        required: true
-        schema:
-          type: string
-          title: User Id
-      - name: limit
-        in: query
-        required: false
-        schema:
-          type: integer
-          maximum: 100
-          minimum: 1
-          default: 5
-          title: Limit
-      responses:
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema: {}
-        '422':
-          description: Error response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '400':
-          description: Error response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '401':
-          description: Error response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '403':
-          description: Error response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '404':
-          description: Error response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '409':
-          description: Error response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '429':
-          description: Error response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '500':
-          description: Error response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
   /users/register:
     post:
       tags:
@@ -635,76 +558,6 @@ paths:
           multipart/form-data:
             schema:
               $ref: '#/components/schemas/Body_register_user_with_voice_users_register_with_voice_post'
-        required: true
-      responses:
-        '200':
-          description: Successful Response
-          content:
-            application/json:
-              schema: {}
-        '422':
-          description: Error response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '400':
-          description: Error response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '401':
-          description: Error response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '403':
-          description: Error response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '404':
-          description: Error response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '409':
-          description: Error response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '429':
-          description: Error response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-        '500':
-          description: Error response
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-  /users/register-old:
-    post:
-      tags:
-      - User Management
-      summary: Register User Old
-      description: 'DEPRECATED: Old registration endpoint. Use POST /users/register
-        instead.'
-      operationId: register_user_old_users_register_old_post
-      requestBody:
-        content:
-          application/json:
-            schema:
-              additionalProperties: true
-              type: object
-              title: User Data
         required: true
       responses:
         '200':
@@ -909,16 +762,16 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-  /users/add-embeddings:
+  /users/register-with-embeddings:
     post:
       tags:
       - User Management
       summary: Add User Embeddings
-      description: 'Add embeddings for a user (used when embeddings already extracted).
+      description: 'Register a new user from already-extracted embeddings.
 
 
         Accepts JSON body with voice and face embeddings.'
-      operationId: add_user_embeddings_users_add_embeddings_post
+      operationId: add_user_embeddings_users_register_with_embeddings_post
       responses:
         '200':
           description: Successful Response
@@ -2163,7 +2016,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-  /teachme/search/{query}:
+  /teachme/search/by-text/{query}:
     get:
       tags:
       - teachme
@@ -2174,7 +2027,7 @@ paths:
         \            \"item_id\": \"...\",\n            \"name\": \"robot_arm\",\n\
         \            \"category\": \"actuator\",\n            \"confidence\": 0.95\n\
         \        }\n    ],\n    \"total\": 1,\n    \"fallback\": false\n}"
-      operationId: search_by_name_teachme_search__query__get
+      operationId: search_by_name_teachme_search_by_text__query__get
       parameters:
       - name: query
         in: path
@@ -2245,7 +2098,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-  /teachme/search/embedding:
+  /teachme/search/by-embedding:
     post:
       tags:
       - teachme
@@ -2257,7 +2110,7 @@ paths:
         \        {\n            \"item_id\": \"...\",\n            \"name\": \"robot_arm\"\
         ,\n            \"similarity_score\": 0.92,\n            \"category\": \"actuator\"\
         \n        }\n    ],\n    \"fallback\": false\n}"
-      operationId: search_by_embedding_teachme_search_embedding_post
+      operationId: search_by_embedding_teachme_search_by_embedding_post
       requestBody:
         content:
           application/json:

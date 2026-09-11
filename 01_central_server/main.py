@@ -56,7 +56,8 @@ def create_app() -> FastAPI:
 
     @app.middleware("http")
     async def transactional_users(request, call_next):
-        if not request.url.path.startswith("/users/") or request.url.path.endswith("/conversations"):
+        is_user_path = request.url.path == "/users" or request.url.path.startswith("/users/")
+        if not is_user_path or request.url.path.endswith("/conversations"):
             return await call_next(request)
         async with app.state.user_store_lock:
             connection = connect()

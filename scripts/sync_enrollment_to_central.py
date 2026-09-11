@@ -43,7 +43,7 @@ def _sync_user(client: httpx.Client, enrollment_url: str, central_url: str, user
     if check_resp.status_code == 200 and check_resp.json().get("exists"):
         return {"user_id": user_id, "status": "skipped", "reason": "already exists"}
 
-    add_resp = client.post(f"{central_url}/users/data/add_user", json=payload)
+    add_resp = client.post(f"{central_url}/users", json=payload)
     add_resp.raise_for_status()
     return {"user_id": user_id, "status": "synced"}
 

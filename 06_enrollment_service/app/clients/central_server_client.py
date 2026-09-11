@@ -68,7 +68,7 @@ class CentralServerClient:
             raise HTTPException(status_code=400, detail="Face and voice embeddings are required")
         
         # Retry logic with exponential backoff
-        endpoint = "/users/data/add_user"
+        endpoint = "/users"
         last_error = None
         
         for attempt in range(self.max_retries):

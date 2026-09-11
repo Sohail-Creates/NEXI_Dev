@@ -3334,10 +3334,10 @@
         ]
       }
     },
-    "/teachme/search/embedding": {
+    "/teachme/search/by-embedding": {
       "post": {
         "description": "Search objects by semantic similarity using embedding.\nUsed to find visually/semantically similar objects.\n\nRequest:\n{\n    \"embedding\": [0.1, 0.2, ..., 0.128],\n    \"k\": 5,\n    \"threshold\": 0.3\n}\n\nResponse:\n{\n    \"query_embedding_size\": 128,\n    \"k\": 5,\n    \"results\": [\n        {\n            \"item_id\": \"...\",\n            \"name\": \"robot_arm\",\n            \"similarity_score\": 0.92,\n            \"category\": \"actuator\"\n        }\n    ],\n    \"fallback\": false\n}",
-        "operationId": "search_by_embedding_teachme_search_embedding_post",
+        "operationId": "search_by_embedding_teachme_search_by_embedding_post",
         "requestBody": {
           "content": {
             "application/json": {
@@ -3444,10 +3444,10 @@
         ]
       }
     },
-    "/teachme/search/{query}": {
+    "/teachme/search/by-text/{query}": {
       "get": {
         "description": "Search learned objects by name.\n\nPath Parameters:\n- query: Search term\n\nQuery Parameters:\n- limit: Max results (1-100, default 10)\n\nResponse:\n{\n    \"query\": \"robot\",\n    \"results\": [\n        {\n            \"item_id\": \"...\",\n            \"name\": \"robot_arm\",\n            \"category\": \"actuator\",\n            \"confidence\": 0.95\n        }\n    ],\n    \"total\": 1,\n    \"fallback\": false\n}",
-        "operationId": "search_by_name_teachme_search__query__get",
+        "operationId": "search_by_name_teachme_search_by_text__query__get",
         "parameters": [
           {
             "in": "path",
@@ -3777,10 +3777,22 @@
         ]
       }
     },
-    "/users/add-embeddings": {
+    "/users": {
       "post": {
-        "description": "Add embeddings for a user (used when embeddings already extracted).\n\nAccepts JSON body with voice and face embeddings.",
-        "operationId": "add_user_embeddings_users_add_embeddings_post",
+        "description": "Create a user record through the canonical users collection.",
+        "operationId": "add_user_users_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": true,
+                "title": "User Data",
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "content": {
@@ -3871,7 +3883,7 @@
             "description": "Error response"
           }
         },
-        "summary": "Add User Embeddings",
+        "summary": "Add User",
         "tags": [
           "User Management"
         ]
@@ -3983,118 +3995,6 @@
           }
         },
         "summary": "Check User Exists",
-        "tags": [
-          "User Management"
-        ]
-      }
-    },
-    "/users/data/add_user": {
-      "post": {
-        "description": "Register new user",
-        "operationId": "add_user_users_data_add_user_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "additionalProperties": true,
-                "title": "User Data",
-                "type": "object"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Error response"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Error response"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Error response"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Error response"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Error response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Error response"
-          },
-          "429": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Error response"
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Error response"
-          }
-        },
-        "summary": "Add User",
         "tags": [
           "User Management"
         ]
@@ -4419,22 +4319,10 @@
         ]
       }
     },
-    "/users/register-old": {
+    "/users/register-with-embeddings": {
       "post": {
-        "description": "DEPRECATED: Old registration endpoint. Use POST /users/register instead.",
-        "operationId": "register_user_old_users_register_old_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "additionalProperties": true,
-                "title": "User Data",
-                "type": "object"
-              }
-            }
-          },
-          "required": true
-        },
+        "description": "Register a new user from already-extracted embeddings.\n\nAccepts JSON body with voice and face embeddings.",
+        "operationId": "add_user_embeddings_users_register_with_embeddings_post",
         "responses": {
           "200": {
             "content": {
@@ -4525,7 +4413,7 @@
             "description": "Error response"
           }
         },
-        "summary": "Register User Old",
+        "summary": "Add User Embeddings",
         "tags": [
           "User Management"
         ]
@@ -5188,129 +5076,6 @@
           }
         },
         "summary": "Append User Embeddings",
-        "tags": [
-          "User Management"
-        ]
-      }
-    },
-    "/users/{user_id}/conversation-history": {
-      "get": {
-        "description": "Get latest conversation turns for a user.",
-        "operationId": "get_user_conversation_history_users__user_id__conversation_history_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "user_id",
-            "required": true,
-            "schema": {
-              "title": "User Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 5,
-              "maximum": 100,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Error response"
-          },
-          "401": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Error response"
-          },
-          "403": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Error response"
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Error response"
-          },
-          "409": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Error response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Error response"
-          },
-          "429": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Error response"
-          },
-          "500": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Error response"
-          }
-        },
-        "summary": "Get User Conversation History",
         "tags": [
           "User Management"
         ]

@@ -93,10 +93,12 @@ async def create_voice_session(file: UploadFile = File(...)):
         "expires_in": data.get("expires_in"),
     }
 
-@router.post("/data/add_user")
+@router.post("/data/add_user", include_in_schema=False, deprecated=True)
+@router.post("")
 async def add_user(user_data: Dict[str, Any], request: Request):
-    """Register new user"""
+    """Create a user record through the canonical users collection."""
     try:
+        await require_internal_service(request)
         app_state = _get_app_state(request)
         if not app_state:
             raise Exception("Application state not initialized")
@@ -232,43 +234,20 @@ async def get_user_by_id(user_id: str, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{user_id}/conversation-history")
-async def get_user_conversation_history(
+@router.get("/{user_id}/conversation-history", include_in_schema=False, deprecated=True)
+async def retired_user_conversation_history(
     user_id: str,
-    limit: int = Query(5, ge=1, le=100),
     request: Request = None,
 ):
-    """Get latest conversation turns for a user."""
-    try:
-        require_user_ownership(request, user_id)
-        app_state = _get_app_state(request)
-        if not app_state:
-            raise Exception("Application state not initialized")
-
-        user = None
-        for u in app_state.db.get("users", []):
-            if u.get("user_id") == user_id:
-                user = u
-                break
-
-        if not user:
-            raise HTTPException(status_code=404, detail=f"User with ID '{user_id}' not found")
-
-        history = user.get("conversation_history", [])
-        if not isinstance(history, list):
-            history = []
-
-        return {
-            "user_id": user_id,
-            "history": history[-limit:],
-            "count": len(history),
-            "limit": limit,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Get conversation history error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    """Transition response for the retired embedded-history resource."""
+    require_user_ownership(request, user_id)
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "code": "CONVERSATION_HISTORY_RETIRED",
+            "message": f"Use /users/{user_id}/conversations for durable conversation data",
+        },
+    )
 
 
 @router.delete("/{user_id}")
@@ -550,15 +529,6 @@ async def register_user_with_voice(
         ) from e
 
 
-@router.post("/register-old")
-async def register_user_old(user_data: Dict[str, Any], request: Request):
-    """DEPRECATED: Old registration endpoint. Use POST /users/register instead."""
-    return {
-        "status": "deprecated",
-        "message": "This endpoint is deprecated. Use POST /users/register instead with audio_file and photo_file parameters."
-    }
-
-
 @router.put("/{user_id}/embeddings")
 async def update_user_embeddings(user_id: str, payload: Dict[str, Any], request: Request):
     """Replace user embeddings entirely (used for re-enrollment)."""
@@ -716,10 +686,11 @@ async def append_user_embeddings(user_id: str, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/add-embeddings")
+@router.post("/add-embeddings", include_in_schema=False, deprecated=True)
+@router.post("/register-with-embeddings")
 async def add_user_embeddings(request: Request):
     """
-    Add embeddings for a user (used when embeddings already extracted).
+    Register a new user from already-extracted embeddings.
     
     Accepts JSON body with voice and face embeddings.
     """
