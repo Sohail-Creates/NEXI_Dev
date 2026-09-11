@@ -277,14 +277,15 @@ def create_rate_limit_middleware(rate_limiter: Optional[RateLimiter] = None):
             )
             
             if not result["allowed"]:
-                from fastapi.responses import JSONResponse
-                
-                return JSONResponse(
-                    status_code=429,
-                    content={"detail": (
+                from shared.api_errors import error_response
+
+                return error_response(
+                    request,
+                    429,
+                    (
                         f"Rate limit exceeded for user. "
                         f"Try again in {result['retry_after']} seconds."
-                    )},
+                    ),
                     headers={
                         "X-RateLimit-Limit": str(result["limit"]),
                         "X-RateLimit-Remaining": "0",
@@ -300,14 +301,15 @@ def create_rate_limit_middleware(rate_limiter: Optional[RateLimiter] = None):
         )
         
         if not result["allowed"]:
-            from fastapi.responses import JSONResponse
-            
-            return JSONResponse(
-                status_code=429,
-                content={"detail": (
+            from shared.api_errors import error_response
+
+            return error_response(
+                request,
+                429,
+                (
                     f"Too many requests from your IP. "
                     f"Try again in {result['retry_after']} seconds."
-                )},
+                ),
                 headers={
                     "X-RateLimit-Limit": str(result["limit"]),
                     "X-RateLimit-Remaining": "0",

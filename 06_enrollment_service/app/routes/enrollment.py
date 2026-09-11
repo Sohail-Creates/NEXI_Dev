@@ -78,8 +78,7 @@ async def improve_training(
     (OLD samples are KEPT, NEW samples are ADDED)
     """
     try:
-        actual_user_id, _ = await enrollment_service.find_enrollment_by_user_name(user_id)
-        require_user_ownership(request, actual_user_id or user_id)
+        require_user_ownership(request, user_id)
         result = await enrollment_service.improve_training(
             user_id=user_id,
             additional_photos=additional_photos,
@@ -106,8 +105,7 @@ async def update_model(
     (OLD samples are DELETED, REPLACED by NEW samples)
     """
     try:
-        actual_user_id, _ = await enrollment_service.find_enrollment_by_user_name(user_id)
-        require_user_ownership(request, actual_user_id or user_id)
+        require_user_ownership(request, user_id)
         result = await enrollment_service.update_model(
             user_id=user_id,
             new_photos=new_photos,
@@ -144,6 +142,8 @@ async def get_storage_stats(request: Request):
         await require_internal_service(request)
         stats = await enrollment_service.get_storage_stats()
         return StorageStatsResponse(**stats)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get storage stats: {str(e)}")
 
@@ -159,6 +159,8 @@ async def list_enrollments(request: Request):
             "total_enrollments": len(user_ids),
             "user_ids": user_ids
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list enrollments: {str(e)}")
 

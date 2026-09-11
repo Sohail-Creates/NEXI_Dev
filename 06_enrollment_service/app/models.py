@@ -24,11 +24,13 @@ class UserCheckResponse(BaseModel):
 class ImproveTrainingResponse(BaseModel):
     status: str
     message: str
+    user_id: str
     total_samples: Dict[str, int]
 
 class UpdateModelResponse(BaseModel):
     status: str
     message: str
+    user_id: str
     total_samples: Dict[str, int]
 
 class HealthCheckResponse(BaseModel):

@@ -669,11 +669,10 @@ async def sync_speakers_from_central():
         
     except Exception as e:
         logger.error(f"Unexpected error during speaker sync: {str(e)}", exc_info=True)
-        return {
-            "success": False,
-            "message": f"Unexpected error: {str(e)}",
-            "speakers_synced": 0
-        }
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"code": "SPEAKER_SYNC_FAILED", "message": "Speaker synchronization failed"},
+        ) from e
 
 
 @router.get(

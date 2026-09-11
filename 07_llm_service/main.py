@@ -5,10 +5,16 @@ Port: 8006
 """
 
 import logging
+import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from shared.security import allowed_origins, InternalRouteAuthMiddleware
+from shared.api_errors import install_error_handlers
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -27,8 +33,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Global service instances
-openrouter_client: OpenRouterClient = None
+# Construct the configured provider without performing network I/O so routes are
+# present in OpenAPI before lifespan startup and at runtime alike.
+openrouter_client = OpenRouterClient()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -36,18 +43,9 @@ async def lifespan(app: FastAPI):
     Lifespan context manager.
     Initializes OpenRouter client.
     """
-    global openrouter_client
-    
     logger.info("=" * 80)
     logger.info("Starting LLM Service (Port 8006) - Online Mode + /format endpoint")
     logger.info("=" * 80)
-    
-    # Initialize OpenRouter client
-    openrouter_client = OpenRouterClient()
-    
-    # Register routes
-    app.include_router(create_generation_routes(openrouter_client))
-    app.include_router(create_format_router(None)) # model_loader removed
     
     yield
     
@@ -69,7 +67,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Route registration is application construction, not a startup side effect.
+app.include_router(create_generation_routes(openrouter_client))
+app.include_router(create_format_router(None))  # model_loader removed
 app.add_middleware(InternalRouteAuthMiddleware, protected_prefixes=("/api/v1/generate",))
+install_error_handlers(app, "llm")
 
 @app.get("/", tags=["info"])
 async def root():

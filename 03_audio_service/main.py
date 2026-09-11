@@ -9,9 +9,15 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from contextlib import asynccontextmanager
+
+# Make the repository-level shared package available for direct ``python main.py`` startup.
+root_dir = Path(__file__).parent.parent
+sys.path.insert(0, str(root_dir))
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from shared.security import allowed_origins, InternalRouteAuthMiddleware, UploadGuardMiddleware
+from shared.api_errors import install_error_handlers
 
 from audio_service.config import (
     API_CONFIG,
@@ -27,8 +33,6 @@ from audio_service.routes import conversation_routes
 from audio_service.routes import orchestration_routes
 
 # Import Phase 1 security: Rate limiting
-root_dir = Path(__file__).parent.parent
-sys.path.insert(0, str(root_dir))
 from shared.rate_limiter import create_rate_limit_middleware
 
 # Configure logging
@@ -306,19 +310,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(
-    InternalRouteAuthMiddleware,
-    protected_prefixes=(
-        "/api/v1/process-voice", "/api/v1/verify-speaker", "/api/v1/enroll-speaker",
-        "/api/v1/transcribe", "/api/v1/speaker-sync",
-    ),
-)
-app.add_middleware(
     UploadGuardMiddleware,
     rules={
         "/api/v1/verify-speaker": (10 * 1024 * 1024, ("multipart/form-data",)),
         "/api/v1/process-voice": (10 * 1024 * 1024, ("multipart/form-data",)),
         "/api/v1/transcribe": (10 * 1024 * 1024, ("multipart/form-data", "application/octet-stream")),
     },
+)
+app.add_middleware(
+    InternalRouteAuthMiddleware,
+    protected_prefixes=(
+        "/api/v1/process-voice", "/api/v1/verify-speaker", "/api/v1/enroll-speaker",
+        "/api/v1/transcribe", "/api/v1/speaker-sync",
+    ),
 )
 
 # Add Phase 1 security: Rate limiting middleware
@@ -335,6 +339,7 @@ app.include_router(advanced_routes.router)
 app.include_router(conversation_routes.router)
 # Phase 5-9: Full orchestration with service integration
 app.include_router(orchestration_routes.router)
+install_error_handlers(app, "audio")
 
 
 @app.get("/", tags=["Health"])

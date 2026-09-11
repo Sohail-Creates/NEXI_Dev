@@ -8,6 +8,7 @@ from fastapi import Depends, FastAPI, HTTPException, status, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from shared.security import allowed_origins
+from shared.api_errors import error_response, install_error_handlers
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from .models import LearningRequest, LearningType
 from .knowledge_base import knowledge_base
@@ -127,6 +128,10 @@ async def general_exception_handler(request: Request, exc: Exception):
         }},
     )
 
+
+# Override the historical local envelope with the cross-service contract.
+install_error_handlers(app, "teachme")
+
 # CORS Configuration (Production)
 app.add_middleware(
     CORSMiddleware,
@@ -181,7 +186,7 @@ async def rate_limit_middleware(request: Request, call_next):
     
     # Check if exceeded limit
     if len(request_counts[client_ip]) >= MAX_REQUESTS_PER_MINUTE:
-        return HTTPException(status_code=429, detail="Rate limit exceeded")
+        return error_response(request, 429, "Rate limit exceeded")
     
     # Add current request
     request_counts[client_ip].append(now)
@@ -793,13 +798,7 @@ async def search_advanced(
         }
     except Exception as e:
         logger.error(f"Advanced search error: {e}", exc_info=True)
-        # Return empty results instead of HTTP 500 (graceful degradation)
-        return {
-            "query": {"name": name, "category": category, "tag": tag, "mode": search_mode},
-            "count": 0,
-            "results": [],
-            "error": str(e)
-        }
+        raise HTTPException(status_code=500, detail="Advanced search failed") from e
 
 @app.post("/knowledge/learn-batch")
 async def learn_batch(requests_list: List[LearningRequest], _auth=Depends(require_api_key)):
@@ -947,13 +946,7 @@ async def get_related_items(
         }
     except Exception as e:
         logger.error(f"Related items error: {e}", exc_info=True)
-        return {
-            "item_id": item_id,
-            "item_name": "Error",
-            "related_count": 0,
-            "related_items": [],
-            "error": str(e)
-        }
+        raise HTTPException(status_code=500, detail="Related-item search failed") from e
 
 @app.get("/metrics")
 async def get_metrics():

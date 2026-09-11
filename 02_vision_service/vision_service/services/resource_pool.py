@@ -61,7 +61,7 @@ class ResourcePool:
         self._camera_client = get_camera_client(central_server_url, "vision_service")
         
     @contextmanager
-    def get_camera(self, timeout: Optional[int] = None):
+    def get_camera(self, timeout: Optional[int] = None, delegated_lease_id: Optional[str] = None):
         """Open only after an acknowledged grant; close before acknowledging release."""
         timeout = timeout or self._camera_timeout
         if not self._camera_lock.acquire(timeout=timeout):
@@ -69,17 +69,24 @@ class ResourcePool:
         try:
             if self._is_shutting_down or self._camera is not None:
                 raise RuntimeError("Camera is shutting down or previous closure failed")
-            if not self._camera_client.request_camera(timeout=timeout):
-                raise RuntimeError("Camera access denied or authority unreachable")
+            owns_lease = delegated_lease_id is None
+            if owns_lease:
+                if not self._camera_client.request_camera(timeout=timeout):
+                    raise RuntimeError("Camera access denied or authority unreachable")
+            elif not self._camera_client.validate_delegated_video_lease(
+                delegated_lease_id, timeout=min(timeout, 2)
+            ):
+                raise RuntimeError("Delegated VIDEO_CALL camera lease is not active")
             stop = threading.Event()
             watcher = None
             try:
                 self._camera = cv2.VideoCapture(0)
                 if not self._camera.isOpened():
                     raise RuntimeError("Cannot access camera - verify device connection")
-                watcher = threading.Thread(target=self._watch_lease,
-                    args=(self._camera_client.lease_id, stop, self._camera), daemon=True)
-                watcher.start()
+                if owns_lease:
+                    watcher = threading.Thread(target=self._watch_lease,
+                        args=(self._camera_client.lease_id, stop, self._camera), daemon=True)
+                    watcher.start()
                 yield _CameraView(self)
             finally:
                 stop.set()
@@ -87,7 +94,8 @@ class ResourcePool:
                     watcher.join(timeout=3)
                 # A closure exception intentionally prevents release acknowledgement.
                 self._close_camera()
-                self._camera_client.release_camera()
+                if owns_lease:
+                    self._camera_client.release_camera()
         finally:
             self._camera_lock.release()
 

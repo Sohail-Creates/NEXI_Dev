@@ -17,6 +17,7 @@ from typing import Dict, List, Optional
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from shared.security import allowed_origins, InternalRouteAuthMiddleware
+from shared.api_errors import install_error_handlers
 from pydantic import BaseModel, ConfigDict, Field
 
 from piper import PiperVoice, SynthesisConfig
@@ -884,6 +885,10 @@ async def general_exception_handler(request: Request, exc: Exception):
         status_code=500,
         media_type="application/json",
     )
+
+
+# Replace the legacy service-local handlers above with the shared Phase 6 contract.
+install_error_handlers(app, "tts")
 
 
 # ==========================

@@ -28,6 +28,8 @@ models/
 *.faiss
 *.onnx
 *.json
+!docs/openapi/
+!docs/openapi/*.json
 
 # Build
 *.whl

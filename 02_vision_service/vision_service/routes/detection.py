@@ -10,7 +10,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, File, UploadFile, Query
+from fastapi import APIRouter, HTTPException, File, UploadFile, Query, Response
 from PIL import Image
 
 from ..models import FaceDetectionResponse, CompleteAnalysisResponse, FaceData, BoundingBox, ObjectDetectionResponse, DetectedObject
@@ -34,6 +34,32 @@ def set_resource_pool(pool: ResourcePool):
     """Set the global resource pool reference"""
     global _resource_pool
     _resource_pool = pool
+
+
+@router.get("/frame", responses={200: {"content": {"image/jpeg": {}}}})
+async def capture_call_frame(lease_id: str = Query(..., min_length=1)):
+    """Capture one JPEG through the existing camera context using a call lease."""
+    if _resource_pool is None:
+        raise HTTPException(status_code=500, detail="Resource pool not initialized")
+    try:
+        with _resource_pool.get_camera(
+            timeout=Config.CAMERA_TIMEOUT,
+            delegated_lease_id=lease_id,
+        ) as camera:
+            success, frame = camera.read()
+            if not success:
+                raise HTTPException(status_code=503, detail="Camera frame unavailable")
+            encoded, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            if not encoded:
+                raise HTTPException(status_code=500, detail="Camera frame encoding failed")
+            return Response(content=buffer.tobytes(), media_type="image/jpeg")
+    except HTTPException:
+        raise
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("Call frame capture failed: %s", exc)
+        raise HTTPException(status_code=500, detail="Call frame capture failed") from exc
 
 
 @router.post("/detect/faces", response_model=FaceDetectionResponse)
@@ -104,18 +130,14 @@ async def detect_faces_from_camera(
                 faces=faces_data
             )
     
+    except ValueError as e:
+        logger.error(f"Face detection validation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Face detection error: {e}")
-        # More graceful error response
-        logger.info("Returning degraded response due to error")
-        return FaceDetectionResponse(
-            status="error",
-            timestamp=datetime.utcnow().isoformat(),
-            frame_width=0,
-            frame_height=0,
-            faces_detected=0,
-            faces=[],
-        )
+        raise HTTPException(status_code=500, detail="Face detection failed") from e
 
 
 @router.post("/detect/faces/upload", response_model=FaceDetectionResponse)
@@ -247,15 +269,11 @@ async def complete_analysis(
                 objects=[DetectedObject(**det) for det in object_results.get("detections", [])]
             )
     
+    except ValueError as e:
+        logger.error(f"Analysis validation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Analysis error: {e}")
-        return CompleteAnalysisResponse(
-            status="error",
-            timestamp=datetime.utcnow().isoformat(),
-            frame_width=0,
-            frame_height=0,
-            faces_detected=0,
-            faces=[],
-            objects_detected=0,
-            objects=[]
-        )
+        raise HTTPException(status_code=500, detail="Complete analysis failed") from e

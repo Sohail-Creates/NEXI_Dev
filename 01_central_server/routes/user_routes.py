@@ -104,6 +104,9 @@ async def add_user(user_data: Dict[str, Any], request: Request):
         name = user_data.get("name")
         if not name:
             raise HTTPException(status_code=400, detail="User name required")
+
+        user_id = user_data.get("user_id") or f"user_{uuid.uuid4().hex[:12]}"
+        user_data["user_id"] = user_id
         
         # Check if user exists
         existing = _find_user_record(app_state, name)
@@ -118,7 +121,7 @@ async def add_user(user_data: Dict[str, Any], request: Request):
         await _persist_users(app_state, request)
         
         logger.info(f"Enrolled user: {name}")
-        return {"status": "success", "message": f"User {name} enrolled"}
+        return {"status": "success", "message": f"User {name} enrolled", "user_id": user_id}
     
     except HTTPException:
         raise
@@ -159,6 +162,8 @@ async def list_users(request: Request):
         
         logger.info(f"[LIST-USERS] DEBUG: Returning {len(users_list)} users")
         return {"users": users_list}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"List users error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -182,6 +187,8 @@ async def check_user_exists(name: str, request: Request):
                 }
             }
         return {"exists": False}
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Check user error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -324,11 +331,10 @@ async def register_user(
         email = user_email or ""
         
         if not username:
-            return {
-                "status": "error",
-                "error_code": "MISSING_NAME",
-                "message": "User name is required"
-            }
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "MISSING_NAME", "message": "User name is required"},
+            )
         
         user_id = f"user_{uuid.uuid4().hex[:12]}"
         
@@ -354,13 +360,14 @@ async def register_user(
             "message": f"User '{username}' enrolled successfully"
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"User registration error: {str(e)}")
-        return {
-            "status": "error",
-            "error_code": "REGISTRATION_FAILED",
-            "message": f"Registration failed: {str(e)}"
-        }
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "REGISTRATION_FAILED", "message": "Registration failed"},
+        ) from e
 
 
 @router.post("/register-with-voice")
@@ -389,28 +396,25 @@ async def register_user_with_voice(
     """
     try:
         if not name or not name.strip():
-            return {
-                "status": "error",
-                "error_code": "MISSING_NAME",
-                "message": "User name is required"
-            }
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "MISSING_NAME", "message": "User name is required"},
+            )
         
         if not email or not email.strip():
-            return {
-                "status": "error",
-                "error_code": "MISSING_EMAIL",
-                "message": "User email is required"
-            }
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "MISSING_EMAIL", "message": "User email is required"},
+            )
         
         # Get audio_client from app state
         audio_client = request.app.state.audio_client
         if not audio_client:
             logger.error("Audio Service client not initialized")
-            return {
-                "status": "error",
-                "error_code": "AUDIO_SERVICE_NOT_AVAILABLE",
-                "message": "Audio Service is not available"
-            }
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "AUDIO_SERVICE_NOT_AVAILABLE", "message": "Audio Service is not available"},
+            )
         
         name = name.strip()
         email = email.strip()
@@ -452,11 +456,10 @@ async def register_user_with_voice(
                 logger.error(f"[register_user_with_voice] Exception type: {type(enroll_err).__name__}")
                 import traceback
                 logger.error(f"[register_user_with_voice] Traceback:\n{traceback.format_exc()}")
-                return {
-                    "status": "error",
-                    "error_code": "AUDIO_SERVICE_EXCEPTION",
-                    "message": f"Audio service exception: {str(enroll_err)}"
-                }
+                raise HTTPException(
+                    status_code=502,
+                    detail={"code": "AUDIO_SERVICE_EXCEPTION", "message": "Audio service request failed"},
+                ) from enroll_err
             
             # Check enrollment result (ServiceCallResult object - has .success, .data, .error_code, .error_message attributes)
             logger.info(f"[register_user_with_voice] Checking enrollment_result.success...")
@@ -466,16 +469,13 @@ async def register_user_with_voice(
                 logger.error(f"[register_user_with_voice]  enrollment_result.success={enrollment_result.success if enrollment_result else 'NONE'}")
                 logger.error(f"[register_user_with_voice] error_code: {error_code}")
                 logger.error(f"[register_user_with_voice] error_message: {error_msg}")
-                return {
-                    "status": "error",
-                    "error_code": error_code,
-                    "message": f"Speaker enrollment failed: {error_msg}",
-                    "details": {
-                        "success": False,
-                        "error_code": error_code,
-                        "error_message": error_msg
-                    }
-                }
+                raise HTTPException(
+                    status_code=502,
+                    detail={
+                        "code": error_code or "AUDIO_ENROLLMENT_FAILED",
+                        "message": f"Speaker enrollment failed: {error_msg}",
+                    },
+                )
             
             # Extract enrollment data from the result (ServiceCallResult.data is the actual dict)
             logger.info(f"[register_user_with_voice]  enrollment_result.success=True")
@@ -540,13 +540,14 @@ async def register_user_with_voice(
                 except Exception as e:
                     logger.warning(f"Could not clean up {audio_path}: {str(e)}")
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"User voice registration error: {str(e)}", exc_info=True)
-        return {
-            "status": "error",
-            "error_code": "REGISTRATION_FAILED",
-            "message": f"Voice registration failed: {str(e)}"
-        }
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "REGISTRATION_FAILED", "message": "Voice registration failed"},
+        ) from e
 
 
 @router.post("/register-old")
@@ -745,11 +746,10 @@ async def add_user_embeddings(request: Request):
             logger.warning(f"    voice_embeddings is empty or None!")
         
         if not user_name or not user_name.strip():
-            return {
-                "success": False,
-                "error": "User name required",
-                "message": "Failed to add embeddings: missing user name"
-            }
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "MISSING_NAME", "message": "User name required"},
+            )
         
         user_id = f"user_{uuid.uuid4().hex[:12]}"
         app_state = request.app.state if request else None
@@ -804,13 +804,14 @@ async def add_user_embeddings(request: Request):
             "message": "User embeddings stored successfully"
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Add embeddings error: {str(e)}", exc_info=True)
-        return {
-            "success": False,
-            "error": str(e),
-            "message": f"Failed to add embeddings: {str(e)}"
-        }
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "ADD_EMBEDDINGS_FAILED", "message": "Failed to add embeddings"},
+        ) from e
 
 
 @router.post("/enroll-complete")
@@ -854,21 +855,19 @@ async def enroll_user_complete(
     """
     try:
         if not user_name or not user_name.strip():
-            return {
-                "success": False,
-                "error": "User name is required",
-                "message": "Enrollment failed: missing user name"
-            }
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "MISSING_NAME", "message": "User name is required"},
+            )
         
         # Get audio client from app state
         app_state = request.app.state if request else None
         if not app_state or not hasattr(app_state, 'audio_client'):
             logger.error("[/users/enroll-complete] Audio client not available in app state")
-            return {
-                "success": False,
-                "error": "AUDIO_SERVICE_UNAVAILABLE",
-                "message": "Audio Service client not initialized"
-            }
+            raise HTTPException(
+                status_code=503,
+                detail={"code": "AUDIO_SERVICE_UNAVAILABLE", "message": "Audio Service client not initialized"},
+            )
         
         audio_client = app_state.audio_client
         user_name = user_name.strip()
@@ -878,23 +877,23 @@ async def enroll_user_complete(
         audio_data = []
         try:
             if not audio_samples or len(audio_samples) == 0:
-                return {
-                    "success": False,
-                    "error": "NO_AUDIO_SAMPLES",
-                    "message": "At least one audio sample required for enrollment"
-                }
+                raise HTTPException(
+                    status_code=400,
+                    detail={"code": "NO_AUDIO_SAMPLES", "message": "At least one audio sample required for enrollment"},
+                )
             
             for idx, file in enumerate(audio_samples):
                 content = await file.read()
                 audio_data.append(content)
                 logger.info(f"[/users/enroll-complete] Read audio sample {idx+1}/{len(audio_samples)} ({len(content)} bytes)")
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"[/users/enroll-complete] Failed to read audio files: {e}")
-            return {
-                "success": False,
-                "error": "AUDIO_READ_FAILED",
-                "message": f"Failed to read audio files: {str(e)}"
-            }
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "AUDIO_READ_FAILED", "message": "Failed to read audio files"},
+            ) from e
         
         # Call AudioClient to enroll and extract embeddings
         logger.info(f"[/users/enroll-complete] Calling AudioClient.enroll_speaker() for {user_id} with {len(audio_data)} samples")
@@ -908,11 +907,10 @@ async def enroll_user_complete(
         if not enrollment_result or not enrollment_result.success:
             logger.error(f"[/users/enroll-complete] AudioClient enrollment failed: {enrollment_result}")
             error_msg = enrollment_result.error_message if enrollment_result else "Unknown error"
-            return {
-                "success": False,
-                "error": "AUDIO_ENROLLMENT_FAILED",
-                "message": f"Audio enrollment failed: {error_msg}"
-            }
+            raise HTTPException(
+                status_code=502,
+                detail={"code": "AUDIO_ENROLLMENT_FAILED", "message": f"Audio enrollment failed: {error_msg}"},
+            )
         
         # Extract embeddings from result
         embeddings_data = enrollment_result.data
@@ -959,13 +957,14 @@ async def enroll_user_complete(
             "message": f"User '{user_name}' enrolled successfully with {len(audio_data)} voice samples"
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"[/users/enroll-complete] Unexpected error: {str(e)}", exc_info=True)
-        return {
-            "success": False,
-            "error": "ENROLLMENT_ERROR",
-            "message": f"Enrollment error: {str(e)}"
-        }
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "ENROLLMENT_ERROR", "message": "Enrollment failed"},
+        ) from e
 
 
 async def init_user_router():

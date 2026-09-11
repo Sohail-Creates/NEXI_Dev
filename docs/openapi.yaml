@@ -1,698 +1,3671 @@
-openapi: 3.0.0
+openapi: 3.1.0
 info:
-  title: NEXI Robot Control System API
-  version: 2.0.0
-  description: Comprehensive API for NEXI robot with security hardening, rate limiting, and optimizations
-  contact:
-    name: NEXI Development Team
-  license:
-    name: MIT
-
-servers:
-  - url: http://localhost:8000
-    description: Central Server (Local)
-  - url: http://nexi.local:8000
-    description: Central Server (Network)
-
-# ============================================================================
-# COMPONENTS
-# ============================================================================
-
-components:
-  schemas:
-    # ========== REQUEST MODELS ==========
-    QueryRequest:
-      type: object
-      required:
-        - text
-        - user_id
-      properties:
-        text:
-          type: string
-          minLength: 1
-          maxLength: 500
-          description: User query or command
-        user_id:
-          type: string
-          minLength: 1
-          description: User identifier
-        language:
-          type: string
-          enum: [english, urdu, spanish]
-          default: english
-          description: Query language
-      example:
-        text: "What is the weather today?"
-        user_id: "sara_001"
-        language: "english"
-
-    LLMGenerateRequest:
-      type: object
-      required:
-        - prompt
-        - user_id
-      properties:
-        prompt:
-          type: string
-          minLength: 1
-          maxLength: 1000
-          description: Prompt for LLM
-        max_tokens:
-          type: integer
-          minimum: 10
-          maximum: 512
-          default: 256
-        temperature:
-          type: number
-          minimum: 0
-          maximum: 2
-          default: 0.7
-        top_p:
-          type: number
-          minimum: 0
-          maximum: 1
-          default: 0.95
-        user_id:
-          type: string
-          description: User identifier
-
-    UserProfile:
-      type: object
-      required:
-        - user_id
-        - username
-        - age
-      properties:
-        user_id:
-          type: string
-          description: Unique user identifier
-        username:
-          type: string
-          description: Display name
-        age:
-          type: integer
-          minimum: 13
-          maximum: 120
-        language:
-          type: string
-          enum: [english, urdu, spanish]
-        preferences:
-          type: object
-          additionalProperties: true
-
-    EnrollmentRequest:
-      type: object
-      required:
-        - username
-        - age
-      properties:
-        username:
-          type: string
-          minLength: 1
-        age:
-          type: integer
-          minimum: 13
-          maximum: 120
-        language:
-          type: string
-          enum: [english, urdu]
-        photo:
-          type: string
-          format: binary
-          description: Profile photo
-        voice:
-          type: string
-          format: binary
-          description: Voice sample
-
-    # ========== RESPONSE MODELS ==========
-    HealthResponse:
-      type: object
-      properties:
-        status:
-          type: string
-          enum: [healthy, degraded, unhealthy]
-        service:
-          type: string
-        version:
-          type: string
-        timestamp:
-          type: string
-          format: date-time
-
-    QueryResponse:
-      type: object
-      properties:
-        success:
-          type: boolean
-        response:
-          type: string
-          description: Generated response text
-        confidence:
-          type: number
-          minimum: 0
-          maximum: 1
-        processing_time_ms:
-          type: integer
-        context:
-          type: object
-          properties:
-            emotion:
-              type: string
-            intent:
-              type: string
-            knowledge_used:
-              type: boolean
-
-    ErrorResponse:
-      type: object
-      properties:
-        error:
-          type: object
-          properties:
-            code:
-              type: string
-            message:
-              type: string
-            details:
-              type: object
-        timestamp:
-          type: string
-          format: date-time
-
-    RateLimitError:
-      type: object
-      properties:
-        detail:
-          type: string
-        retry_after:
-          type: integer
-          description: Seconds to wait before retrying
-        limit:
-          type: integer
-          description: Request limit
-        window:
-          type: string
-          description: Time window (e.g., '1 minute')
-
-  responses:
-    # ========== STANDARD RESPONSES ==========
-    Success200:
-      description: Successful operation
-      content:
-        application/json:
-          schema:
-            type: object
-
-    Created201:
-      description: Resource created
-      content:
-        application/json:
-          schema:
-            type: object
-
-    BadRequest400:
-      description: Invalid request parameters
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorResponse'
-
-    Unauthorized401:
-      description: Authentication required
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorResponse'
-
-    RateLimited429:
-      description: Too many requests (rate limit exceeded)
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/RateLimitError'
-      headers:
-        X-RateLimit-Limit:
-          schema:
-            type: integer
-          description: Request limit
-        X-RateLimit-Remaining:
-          schema:
-            type: integer
-          description: Remaining requests
-        X-RateLimit-Reset:
-          schema:
-            type: integer
-          description: Unix timestamp when limit resets
-        Retry-After:
-          schema:
-            type: integer
-          description: Seconds to wait before retrying
-
-    ServerError500:
-      description: Internal server error
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorResponse'
-
-  securitySchemes:
-    bearerAuth:
-      type: http
-      scheme: bearer
-      bearerFormat: JWT
-
-    apiKeyAuth:
-      type: apiKey
-      in: header
-      name: X-API-Key
-
-# ============================================================================
-# PATHS
-# ============================================================================
-
+  title: NEXI Central Server
+  version: 1.0.0
 paths:
+  /users/session/voice:
+    post:
+      tags:
+      - User Management
+      summary: Create Voice Session
+      description: Issue a session only through Audio's existing speaker matcher.
+      operationId: create_voice_session_users_session_voice_post
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Body_create_voice_session_users_session_voice_post'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /users/data/add_user:
+    post:
+      tags:
+      - User Management
+      summary: Add User
+      description: Register new user
+      operationId: add_user_users_data_add_user_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              additionalProperties: true
+              type: object
+              title: User Data
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /users/list:
+    get:
+      tags:
+      - User Management
+      summary: List Users
+      description: List all registered users with their embeddings
+      operationId: list_users_users_list_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /users/check:
+    get:
+      tags:
+      - User Management
+      summary: Check User Exists
+      description: Check if user exists
+      operationId: check_user_exists_users_check_get
+      parameters:
+      - name: name
+        in: query
+        required: true
+        schema:
+          type: string
+          title: Name
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /users/search/{user_name}:
+    get:
+      tags:
+      - User Management
+      summary: Search User By Name
+      description: Get user data by name
+      operationId: search_user_by_name_users_search__user_name__get
+      parameters:
+      - name: user_name
+        in: path
+        required: true
+        schema:
+          type: string
+          title: User Name
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /users/{user_id}:
+    get:
+      tags:
+      - User Management
+      summary: Get User By Id
+      description: Get user profile by user_id.
+      operationId: get_user_by_id_users__user_id__get
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: User Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    delete:
+      tags:
+      - User Management
+      summary: Delete User
+      description: Delete user and all associated data
+      operationId: delete_user_users__user_id__delete
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: User Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /users/{user_id}/conversation-history:
+    get:
+      tags:
+      - User Management
+      summary: Get User Conversation History
+      description: Get latest conversation turns for a user.
+      operationId: get_user_conversation_history_users__user_id__conversation_history_get
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: User Id
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 5
+          title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /users/register:
+    post:
+      tags:
+      - User Management
+      summary: Register User
+      description: 'Register user with audio and/or photo files.
+
+
+        Accepts both Form and JSON input for maximum flexibility.'
+      operationId: register_user_users_register_post
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Body_register_user_users_register_post'
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /users/register-with-voice:
+    post:
+      tags:
+      - User Management
+      summary: Register User With Voice
+      description: "Register user with 3 voice samples for speaker enrollment via\
+        \ Audio Service.\n\nAudio Service will compute speaker embeddings and enrollment\
+        \ confidence.\n\nArgs:\n    name: User's name for registration\n    email:\
+        \ User's email address\n    audio_sample1: First voice sample (WAV/MP3)\n\
+        \    audio_sample2: Second voice sample (WAV/MP3)\n    audio_sample3: Third\
+        \ voice sample (WAV/MP3)\n    request: FastAPI request context\n\nReturns:\n\
+        \    User ID, enrollment status, and confidence score from Audio Service"
+      operationId: register_user_with_voice_users_register_with_voice_post
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Body_register_user_with_voice_users_register_with_voice_post'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /users/register-old:
+    post:
+      tags:
+      - User Management
+      summary: Register User Old
+      description: 'DEPRECATED: Old registration endpoint. Use POST /users/register
+        instead.'
+      operationId: register_user_old_users_register_old_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              additionalProperties: true
+              type: object
+              title: User Data
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /users/{user_id}/embeddings:
+    put:
+      tags:
+      - User Management
+      summary: Update User Embeddings
+      description: Replace user embeddings entirely (used for re-enrollment).
+      operationId: update_user_embeddings_users__user_id__embeddings_put
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: User Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+              title: Payload
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /users/{user_id}/append-embeddings:
+    post:
+      tags:
+      - User Management
+      summary: Append User Embeddings
+      description: 'Append new embeddings to existing user (used for improve training).
+
+
+        Accumulates: Old embeddings + New embeddings = All embeddings saved
+
+        Preserves all historical embeddings for improved model training.'
+      operationId: append_user_embeddings_users__user_id__append_embeddings_post
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: User Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /users/add-embeddings:
+    post:
+      tags:
+      - User Management
+      summary: Add User Embeddings
+      description: 'Add embeddings for a user (used when embeddings already extracted).
+
+
+        Accepts JSON body with voice and face embeddings.'
+      operationId: add_user_embeddings_users_add_embeddings_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /users/enroll-complete:
+    post:
+      tags:
+      - User Management
+      summary: Enroll User Complete
+      description: "Complete user enrollment with audio samples (from Streamlit app.py).\n\
+        \nTHIS IS THE PRIMARY ENDPOINT FOR STREAMLIT INTEGRATION.\n\nFlow:\n1. Receives\
+        \ multipart audio files from Streamlit\n2. Calls Audio Service via audio_client.enroll_speaker()\
+        \ to extract embeddings\n3. Stores user with real embeddings in Central Server\n\
+        4. Returns user_id and enrollment confirmation\n\nArgs:\n    user_name: User's\
+        \ full name\n    age: User's age (optional)\n    relation: User's relation\
+        \ (optional)\n    audio_samples: List of uploaded audio files (WAV/MP3)\n\
+        \    request: FastAPI request context for accessing app state\n\nReturns:\n\
+        \    {\n        \"success\": true,\n        \"data\": {\n            \"user_id\"\
+        : \"user_xyz\",\n            \"name\": \"John Doe\",\n            \"enrolled_with\"\
+        : 5,\n            \"embeddings_count\": 5,\n            \"enrollment_timestamp\"\
+        : \"2026-02-10T12:34:56\"\n        },\n        \"message\": \"User enrolled\
+        \ successfully\"\n    }"
+      operationId: enroll_user_complete_users_enroll_complete_post
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/Body_enroll_user_complete_users_enroll_complete_post'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /users/{user_id}/conversations:
+    post:
+      tags:
+      - Conversations
+      summary: Store User Conversation
+      description: "Store a new conversation for a user.\n\nPOST /users/{user_id}/conversations\n\
+        \nExpected JSON payload:\n{\n    \"user_message\": \"Tell me about gardening\"\
+        ,\n    \"assistant_response\": \"Flowers are amazing...\",\n    \"mood\":\
+        \ \"happy\",\n    \"language\": \"en\",\n    \"metadata\": {}  // optional\n\
+        }\n\nResponse:\n{\n    \"status\": \"success\",\n    \"user_id\": \"sara123\"\
+        ,\n    \"timestamp\": \"2026-03-08T15:45:00Z\"\n}"
+      operationId: store_user_conversation_users__user_id__conversations_post
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: User Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Store User Conversation Users  User Id  Conversations
+                  Post
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    get:
+      tags:
+      - Conversations
+      summary: Get User Conversations Endpoint
+      description: "Retrieve conversations for a user.\n\nGET /users/{user_id}/conversations?limit=10&start_date=...&end_date=...\n\
+        \nQuery parameters:\n- limit: Number of conversations to return (1-500, default\
+        \ 10)\n- start_date: ISO timestamp for filtering (inclusive)\n- end_date:\
+        \ ISO timestamp for filtering (inclusive)\n\nReturns most recent conversations\
+        \ first.\n\nResponse:\n{\n    \"user_id\": \"sara123\",\n    \"conversations\"\
+        : [...],\n    \"count\": 5,\n    \"limit\": 10\n}"
+      operationId: get_user_conversations_endpoint_users__user_id__conversations_get
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: User Id
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 500
+          minimum: 1
+          default: 10
+          title: Limit
+      - name: start_date
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Start Date
+      - name: end_date
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: End Date
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get User Conversations Endpoint Users  User Id  Conversations
+                  Get
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    delete:
+      tags:
+      - Conversations
+      summary: Delete All User Conversations
+      description: "Delete all conversations for a user (e.g., for privacy/account\
+        \ deletion).\n\nDELETE /users/{user_id}/conversations\n\nResponse:\n{\n  \
+        \  \"status\": \"deleted\",\n    \"user_id\": \"sara123\",\n    \"message\"\
+        : \"All conversations deleted for user sara123\"\n}"
+      operationId: delete_all_user_conversations_users__user_id__conversations_delete
+      parameters:
+      - name: user_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: User Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Delete All User Conversations Users  User Id  Conversations
+                  Delete
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /conversations/{conversation_id}:
+    get:
+      tags:
+      - Conversations
+      summary: Get Single Conversation
+      description: 'Retrieve a specific conversation by ID.
+
+
+        GET /conversations/{conversation_id}
+
+
+        Response: Single conversation object with all details'
+      operationId: get_single_conversation_conversations__conversation_id__get
+      parameters:
+      - name: conversation_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Conversation Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Single Conversation Conversations  Conversation
+                  Id  Get
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /admin/stats:
+    get:
+      tags:
+      - Conversations
+      summary: Get Conversation Statistics
+      description: "Get analytics about all conversations (admin endpoint).\n\nResponse:\n\
+        {\n    \"total_conversations\": 1542,\n    \"unique_users\": 25,\n    \"conversations_per_user\"\
+        : {\"sara123\": 45, \"ali456\": 23, ...},\n    \"by_language\": {\"en\": 900,\
+        \ \"ur\": 642},\n    \"oldest_timestamp\": \"2026-02-15T10:00:00Z\",\n   \
+        \ \"newest_timestamp\": \"2026-03-08T15:45:00Z\"\n}"
+      operationId: get_conversation_statistics_admin_stats_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Get Conversation Statistics Admin Stats Get
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /camera/request:
+    post:
+      tags:
+      - camera
+      summary: Request Camera
+      operationId: request_camera_camera_request_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CameraRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /camera/release:
+    post:
+      tags:
+      - camera
+      summary: Release Camera
+      operationId: release_camera_camera_release_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CameraRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /camera/status:
+    get:
+      tags:
+      - camera
+      summary: Get Camera Status
+      operationId: get_camera_status_camera_status_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /camera/force-release:
+    post:
+      tags:
+      - camera
+      summary: Force Release Camera
+      operationId: force_release_camera_camera_force_release_post
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /calls/start:
+    post:
+      tags:
+      - video-call
+      summary: Start Call
+      operationId: start_call_calls_start_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CallRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /calls/end:
+    post:
+      tags:
+      - video-call
+      summary: End Call
+      operationId: end_call_calls_end_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CallRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /calls/status:
+    get:
+      tags:
+      - video-call
+      summary: Get Call Status
+      operationId: get_call_status_calls_status_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /calls/screenshot:
+    get:
+      tags:
+      - video-call
+      summary: Capture Call Screenshot
+      operationId: capture_call_screenshot_calls_screenshot_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+            image/jpeg: {}
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /teachme/health:
+    get:
+      tags:
+      - teachme
+      summary: Teachme Health
+      description: "Check TeachMe service health\n\nResponse:\n{\n    \"status\":\
+        \ \"healthy|unavailable\",\n    \"service\": \"teachme\",\n    \"circuit_state\"\
+        : \"closed|open|half_open\",\n    \"reachable\": true|false\n}"
+      operationId: teachme_health_teachme_health_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /teachme/status:
+    get:
+      tags:
+      - teachme
+      summary: Teachme Status
+      description: 'Get detailed TeachMe status and metrics
+
+
+        Response includes:
+
+        - Circuit breaker state
+
+        - Queue statistics
+
+        - Request metrics
+
+        - Performance metrics'
+      operationId: teachme_status_teachme_status_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /teachme/learn:
+    post:
+      tags:
+      - teachme
+      summary: Learn Object
+      description: "Learn a typed object or fact; TeachMe owns semantic embedding\
+        \ generation.\n\nRequest:\n{\n    \"type\": \"object\",\n    \"data\": {\"\
+        name\": \"robot_arm\", \"category\": \"actuator\", \"attributes\": {}},\n\
+        \    \"confidence\": 0.95,\n    \"tags\": [\"metal\", \"movable\"],\n    \"\
+        source\": \"vision_service\"\n}\n\nResponse:\n{\n    \"success\": true,\n\
+        \    \"item_id\": \"550e8400-...\",\n    \"type\": \"object\",\n    \"stored_at\"\
+        : \"2026-02-22T...\",\n    \"fallback\": false\n}"
+      operationId: learn_object_teachme_learn_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LearningRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /teachme/search/{query}:
+    get:
+      tags:
+      - teachme
+      summary: Search By Name
+      description: "Search learned objects by name.\n\nPath Parameters:\n- query:\
+        \ Search term\n\nQuery Parameters:\n- limit: Max results (1-100, default 10)\n\
+        \nResponse:\n{\n    \"query\": \"robot\",\n    \"results\": [\n        {\n\
+        \            \"item_id\": \"...\",\n            \"name\": \"robot_arm\",\n\
+        \            \"category\": \"actuator\",\n            \"confidence\": 0.95\n\
+        \        }\n    ],\n    \"total\": 1,\n    \"fallback\": false\n}"
+      operationId: search_by_name_teachme_search__query__get
+      parameters:
+      - name: query
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Query
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 10
+          title: Limit
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /teachme/search/embedding:
+    post:
+      tags:
+      - teachme
+      summary: Search By Embedding
+      description: "Search objects by semantic similarity using embedding.\nUsed to\
+        \ find visually/semantically similar objects.\n\nRequest:\n{\n    \"embedding\"\
+        : [0.1, 0.2, ..., 0.128],\n    \"k\": 5,\n    \"threshold\": 0.3\n}\n\nResponse:\n\
+        {\n    \"query_embedding_size\": 128,\n    \"k\": 5,\n    \"results\": [\n\
+        \        {\n            \"item_id\": \"...\",\n            \"name\": \"robot_arm\"\
+        ,\n            \"similarity_score\": 0.92,\n            \"category\": \"actuator\"\
+        \n        }\n    ],\n    \"fallback\": false\n}"
+      operationId: search_by_embedding_teachme_search_embedding_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EmbeddingSearchRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /teachme/objects:
+    get:
+      tags:
+      - teachme
+      summary: Get All Objects
+      description: "Get all learned objects from TeachMe.\nUsed for syncing with other\
+        \ services.\n\nQuery Parameters:\n- limit: Results per page (1-500, default\
+        \ 100)\n- offset: Pagination offset (default 0)\n\nResponse:\n{\n    \"objects\"\
+        : [\n        {\n            \"item_id\": \"...\",\n            \"name\": \"\
+        robot_arm\",\n            \"category\": \"actuator\",\n            \"embedding\"\
+        : [...],\n            \"confidence\": 0.95\n        }\n    ],\n    \"total\"\
+        : 442,\n    \"limit\": 100,\n    \"offset\": 0,\n    \"fallback\": false\n\
+        }"
+      operationId: get_all_objects_teachme_objects_get
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 500
+          minimum: 1
+          default: 100
+          title: Limit
+      - name: offset
+        in: query
+        required: false
+        schema:
+          type: integer
+          minimum: 0
+          default: 0
+          title: Offset
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /teachme/sync:
+    post:
+      tags:
+      - teachme
+      summary: Sync Knowledge
+      description: "Sync knowledge with other services.\nAllows services to push knowledge\
+        \ learned from TeachMe to other components.\n\nRequest:\n{\n    \"service_name\"\
+        : \"vision_service\",\n    \"items\": [\n        {\n            \"name\":\
+        \ \"object_1\",\n            \"category\": \"...\",\n            \"embedding\"\
+        : [...]\n        }\n    ]\n}\n\nResponse:\n{\n    \"status\": \"synced\",\n\
+        \    \"service\": \"vision_service\",\n    \"items_synced\": 5,\n    \"timestamp\"\
+        : \"2026-02-22T...\"\n}"
+      operationId: sync_knowledge_teachme_sync_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SyncRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /teachme/metrics:
+    get:
+      tags:
+      - teachme
+      summary: Get Metrics
+      description: "Get TeachMe connector metrics.\nShows circuit breaker state, queue\
+        \ stats, and performance metrics.\n\nResponse:\n{\n    \"service\": \"teachme\"\
+        ,\n    \"circuit_state\": \"closed\",\n    \"queue\": {\n        \"queue_size\"\
+        : 2,\n        \"max_queue_size\": 1000,\n        \"processing_count\": 1,\n\
+        \        \"max_concurrent\": 10,\n        \"processed_total\": 150,\n    \
+        \    \"dropped_total\": 0\n    },\n    \"metrics\": {\n        \"total_requests\"\
+        : 500,\n        \"successful_requests\": 490,\n        \"failed_requests\"\
+        : 10,\n        \"avg_response_time_ms\": 45.2\n    }\n}"
+      operationId: get_metrics_teachme_metrics_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/v1/rag/query:
+    post:
+      tags:
+      - restricted-rag
+      summary: Restricted Query
+      operationId: restricted_query_api_v1_rag_query_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RAGQueryRequest'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /resources/focus:
+    get:
+      tags:
+      - Hardware Resources
+      summary: Get Focus Mode
+      description: Poll the cooperative service-level focus signal.
+      operationId: get_focus_mode_resources_focus_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Get Focus Mode Resources Focus Get
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /resources/request:
+    post:
+      tags:
+      - Hardware Resources
+      summary: Request Resource
+      description: 'Request access to a hardware resource.
+
+
+        Returns immediately with lease_id if available, or queued status if busy.
+
+        Higher priorities may preempt lower priority tasks.'
+      operationId: request_resource_resources_request_post
+      parameters:
+      - name: resource_type
+        in: query
+        required: true
+        schema:
+          type: string
+          description: 'Type of resource: camera, microphone'
+          title: Resource Type
+        description: 'Type of resource: camera, microphone'
+      - name: service_name
+        in: query
+        required: true
+        schema:
+          type: string
+          description: Name of requesting service
+          title: Service Name
+        description: Name of requesting service
+      - name: priority
+        in: query
+        required: false
+        schema:
+          type: string
+          description: 'Priority: CRITICAL, HIGH, MEDIUM, LOW'
+          default: MEDIUM
+          title: Priority
+        description: 'Priority: CRITICAL, HIGH, MEDIUM, LOW'
+      - name: timeout_seconds
+        in: query
+        required: false
+        schema:
+          type: integer
+          description: Maximum time to hold resource
+          default: 30
+          title: Timeout Seconds
+        description: Maximum time to hold resource
+      - name: holder_pid
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            exclusiveMinimum: 0
+          - type: 'null'
+          title: Holder Pid
+      - name: holder_started
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: number
+            exclusiveMinimum: 0
+          - type: 'null'
+          title: Holder Started
+      - name: holder_port
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: integer
+            maximum: 65535
+            minimum: 1
+          - type: 'null'
+          title: Holder Port
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Request Resource Resources Request Post
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /resources/acknowledge/{lease_id}:
+    post:
+      tags:
+      - Hardware Resources
+      summary: Acknowledge Grant
+      operationId: acknowledge_grant_resources_acknowledge__lease_id__post
+      parameters:
+      - name: lease_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Lease Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Acknowledge Grant Resources Acknowledge  Lease Id  Post
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /resources/revoke/{lease_id}:
+    post:
+      tags:
+      - Hardware Resources
+      summary: Revoke Lease
+      operationId: revoke_lease_resources_revoke__lease_id__post
+      parameters:
+      - name: lease_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Lease Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Revoke Lease Resources Revoke  Lease Id  Post
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /resources/release/{lease_id}:
+    post:
+      tags:
+      - Hardware Resources
+      summary: Release Resource
+      description: 'Release a hardware resource lease.
+
+
+        After release, the next queued request (if any) is automatically granted.'
+      operationId: release_resource_resources_release__lease_id__post
+      parameters:
+      - name: lease_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Lease Id
+      - name: forced
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+          title: Forced
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Release Resource Resources Release  Lease Id  Post
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /resources/status/{lease_id}:
+    get:
+      tags:
+      - Hardware Resources
+      summary: Get Lease Status
+      description: 'Check the status of a resource lease.
+
+
+        Returns current status (active, expired, queued, etc.)'
+      operationId: get_lease_status_resources_status__lease_id__get
+      parameters:
+      - name: lease_id
+        in: path
+        required: true
+        schema:
+          type: string
+          title: Lease Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                title: Response Get Lease Status Resources Status  Lease Id  Get
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /resources/status:
+    get:
+      tags:
+      - Hardware Resources
+      summary: Get All Resources Status
+      description: 'Get comprehensive status of all hardware resources.
+
+
+        Shows:
+
+        - Current holder of each resource
+
+        - Queue of waiting requests
+
+        - Availability status
+
+        - Time remaining for active leases'
+      operationId: get_all_resources_status_resources_status_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Get All Resources Status Resources Status Get
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /resources/health:
+    get:
+      tags:
+      - Hardware Resources
+      summary: Resource Manager Health
+      description: 'Health check for resource manager.
+
+
+        Returns True if resource manager is operational.'
+      operationId: resource_manager_health_resources_health_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                additionalProperties: true
+                type: object
+                title: Response Resource Manager Health Resources Health Get
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /:
     get:
-      summary: Root endpoint
-      description: Returns API status
-      tags:
-        - Health
+      summary: Root
+      operationId: root__get
       responses:
         '200':
-          description: API is running
+          description: Successful Response
           content:
             application/json:
               schema:
+                additionalProperties: true
                 type: object
-                properties:
-                  status:
-                    type: string
-                  version:
-                    type: string
-
+                title: Response Root  Get
+        '400':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '500':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /health:
     get:
-      summary: Health check
-      description: |
-        Service health status endpoint. Always available (exempt from rate limiting).
-        Used for monitoring and load balancer health checks.
-      tags:
-        - Health
+      summary: Health
+      operationId: health_health_get
       responses:
         '200':
-          description: Service is healthy
+          description: Successful Response
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/HealthResponse'
-        '503':
-          description: Service unavailable
-          $ref: '#/components/responses/ServerError500'
-
-  /api/v1/query:
-    post:
-      summary: User query/command
-      description: |
-        Process user query and generate response with context awareness.
-        
-        **Rate Limit:** 100 requests/minute per user
-        
-        **Process:**
-        1. Validate input (XSS, injection prevention)
-        2. Check rate limit
-        3. Build context (vision, audio, knowledge)
-        4. Generate response (LLM)
-        5. Convert to speech (TTS)
-        6. Return response
-      operationId: processQuery
-      tags:
-        - Query
-      security:
-        - bearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/QueryRequest'
-      responses:
-        '200':
-          description: Query processed successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/QueryResponse'
+                additionalProperties: true
+                type: object
+                title: Response Health Health Get
         '400':
-          $ref: '#/components/responses/BadRequest400'
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '401':
-          $ref: '#/components/responses/Unauthorized401'
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '422':
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '429':
-          $ref: '#/components/responses/RateLimited429'
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
         '500':
-          $ref: '#/components/responses/ServerError500'
-
-  /api/v1/user/{user_id}:
-    get:
-      summary: Get user profile
-      description: Retrieve user profile information
-      operationId: getUser
-      tags:
-        - Users
-      parameters:
-        - name: user_id
-          in: path
-          required: true
-          schema:
+          description: Error response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+components:
+  schemas:
+    Body_create_voice_session_users_session_voice_post:
+      properties:
+        file:
+          type: string
+          format: binary
+          title: File
+      type: object
+      required:
+      - file
+      title: Body_create_voice_session_users_session_voice_post
+    Body_enroll_user_complete_users_enroll_complete_post:
+      properties:
+        user_name:
+          type: string
+          title: User Name
+        age:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Age
+        relation:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Relation
+        audio_samples:
+          items: {}
+          type: array
+          title: Audio Samples
+      type: object
+      required:
+      - user_name
+      - audio_samples
+      title: Body_enroll_user_complete_users_enroll_complete_post
+    Body_register_user_users_register_post:
+      properties:
+        name:
+          type: string
+          title: Name
+        audio_file:
+          anyOf:
+          - type: string
+            format: binary
+          - type: 'null'
+          title: Audio File
+        photo_file:
+          anyOf:
+          - type: string
+            format: binary
+          - type: 'null'
+          title: Photo File
+        user_name:
+          type: string
+          title: User Name
+        user_email:
+          type: string
+          title: User Email
+      type: object
+      title: Body_register_user_users_register_post
+    Body_register_user_with_voice_users_register_with_voice_post:
+      properties:
+        name:
+          type: string
+          title: Name
+        email:
+          type: string
+          title: Email
+        audio_sample1:
+          type: string
+          format: binary
+          title: Audio Sample1
+        audio_sample2:
+          type: string
+          format: binary
+          title: Audio Sample2
+        audio_sample3:
+          type: string
+          format: binary
+          title: Audio Sample3
+      type: object
+      required:
+      - name
+      - email
+      - audio_sample1
+      - audio_sample2
+      - audio_sample3
+      title: Body_register_user_with_voice_users_register_with_voice_post
+    CallRequest:
+      properties:
+        call_id:
+          type: string
+          maxLength: 128
+          minLength: 1
+          pattern: ^[A-Za-z0-9_.:-]+$
+          title: Call Id
+      type: object
+      required:
+      - call_id
+      title: CallRequest
+    CameraRequest:
+      properties:
+        service_name:
+          type: string
+          title: Service Name
+        timeout:
+          type: integer
+          title: Timeout
+          default: 30
+        lease_id:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Lease Id
+      type: object
+      required:
+      - service_name
+      title: CameraRequest
+    EmbeddingSearchRequest:
+      properties:
+        query:
+          type: string
+          maxLength: 200
+          minLength: 1
+          title: Query
+        k:
+          type: integer
+          title: K
+          default: 5
+        threshold:
+          type: number
+          title: Threshold
+          default: 0.3
+      type: object
+      required:
+      - query
+      title: EmbeddingSearchRequest
+      description: Embedding-based search request
+    FactData:
+      properties:
+        subject:
+          type: string
+          title: Subject
+        predicate:
+          type: string
+          title: Predicate
+        object:
+          type: string
+          title: Object
+        context:
+          additionalProperties: true
+          type: object
+          title: Context
+      type: object
+      required:
+      - subject
+      - predicate
+      - object
+      title: FactData
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    LearningRequest:
+      properties:
+        type:
+          type: string
+          enum:
+          - object
+          - fact
+          title: Type
+        data:
+          anyOf:
+          - $ref: '#/components/schemas/ObjectData'
+          - $ref: '#/components/schemas/FactData'
+          title: Data
+        tags:
+          items:
             type: string
-      security:
-        - bearerAuth: []
-      responses:
-        '200':
-          description: User profile retrieved
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/UserProfile'
-        '404':
-          description: User not found
-          $ref: '#/components/responses/ServerError500'
-
-    delete:
-      summary: Delete user
-      description: Delete user profile and all associated data
-      operationId: deleteUser
-      tags:
-        - Users
-      parameters:
-        - name: user_id
-          in: path
-          required: true
-          schema:
-            type: string
-      security:
-        - bearerAuth: []
-      responses:
-        '200':
-          description: User deleted successfully
-        '404':
-          description: User not found
-        '429':
-          $ref: '#/components/responses/RateLimited429'
-
-  /api/v1/enroll:
-    post:
-      summary: Start user enrollment
-      description: |
-        Start new user enrollment process. Validates photos and voice samples.
-        
-        **Rate Limit:** 5 requests / 5 minutes (sensitive operation)
-        
-        **Process:**
-        1. Validate user data
-        2. Process photo (face detection)
-        3. Process voice sample (speaker verification)
-        4. Create user embeddings
-        5. Register with central server
-      operationId: startEnrollment
-      tags:
-        - Enrollment
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/EnrollmentRequest'
-          multipart/form-data:
-            schema:
-              $ref: '#/components/schemas/EnrollmentRequest'
-      responses:
-        '201':
-          $ref: '#/components/responses/Created201'
-        '400':
-          description: Invalid enrollment data
-          $ref: '#/components/responses/BadRequest400'
-        '429':
-          description: Rate limit exceeded (5 per 5 minutes)
-          $ref: '#/components/responses/RateLimited429'
-
-  /api/v1/llm/generate:
-    post:
-      summary: Generate text using LLM
-      description: |
-        Generate response using quantized LLM model (SmolLM2 1.7B with 8-bit quantization).
-        
-        **Rate Limit:** 10 requests/minute (expensive operation)
-        
-        **Parameters:**
-        - max_tokens: Output length (default: 256)
-        - temperature: Creativity level (0-2, default: 0.7)
-        - top_p: Diversity parameter (default: 0.95)
-        
-        **Timeout:** 15 seconds (returns fallback if exceeded)
-      operationId: generateText
-      tags:
-        - LLM
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/LLMGenerateRequest'
-      security:
-        - bearerAuth: []
-      responses:
-        '200':
-          description: Text generated successfully
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  generated_text:
-                    type: string
-                  tokens_used:
-                    type: integer
-                  processing_time_ms:
-                    type: integer
-        '400':
-          $ref: '#/components/responses/BadRequest400'
-        '429':
-          description: Rate limit exceeded (10 per minute)
-          $ref: '#/components/responses/RateLimited429'
-        '504':
-          description: LLM inference timeout (>15s)
-          $ref: '#/components/responses/ServerError500'
-
-  # ========== VISION SERVICE ENDPOINTS ==========
-  /api/v1/vision/extract-embedding:
-    post:
-      summary: Extract face embedding
-      description: Extract face embedding from image
-      operationId: extractFaceEmbedding
-      tags:
-        - Vision
-      requestBody:
-        required: true
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              properties:
-                image:
-                  type: string
-                  format: binary
-      responses:
-        '200':
-          description: Embedding extracted
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  embedding:
-                    type: array
-                    items:
-                      type: number
-                  confidence:
-                    type: number
-
-  # ========== AUDIO SERVICE ENDPOINTS ==========
-  /api/v1/audio/embedding:
-    post:
-      summary: Extract voice embedding
-      description: Extract voice embedding from audio
-      operationId: extractVoiceEmbedding
-      tags:
-        - Audio
-      requestBody:
-        required: true
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              properties:
-                audio:
-                  type: string
-                  format: binary
-      responses:
-        '200':
-          description: Voice embedding extracted
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  embedding:
-                    type: array
-                    items:
-                      type: number
-                  confidence:
-                    type: number
-
-  # ========== TTS SERVICE ENDPOINTS ==========
-  /api/v1/tts/synthesize:
-    post:
-      summary: Text to speech synthesis
-      description: Convert text to speech
-      operationId: synthesizeText
-      tags:
-        - TTS
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                text:
-                  type: string
-                voice:
-                  type: string
-                  enum: [ryan, jessica, shahid]
-                language:
-                  type: string
-                  enum: [english, urdu]
-      responses:
-        '200':
-          description: Audio synthesized
-          content:
-            audio/wav:
-              schema:
-                type: string
-                format: binary
-
-  # ========== TEACHME SERVICE ENDPOINTS ==========
-  /api/v1/teachme/learn:
-    post:
-      summary: Learn new object
-      description: Teach robot about new object or concept
-      operationId: learnObject
-      tags:
-        - TeachMe
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                object_name:
-                  type: string
-                description:
-                  type: string
-                image:
-                  type: string
-                  format: binary
-      responses:
-        '201':
-          description: Object learned
-          $ref: '#/components/responses/Created201'
-
-  /api/v1/teachme/recognize:
-    post:
-      summary: Recognize object
-      description: Identify learned object from image
-      operationId: recognizeObject
-      tags:
-        - TeachMe
-      requestBody:
-        required: true
-        content:
-          multipart/form-data:
-            schema:
-              type: object
-              properties:
-                image:
-                  type: string
-                  format: binary
-      responses:
-        '200':
-          description: Object recognized
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  object_name:
-                    type: string
-                  confidence:
-                    type: number
-
-# ============================================================================
-# TAGS
-# ============================================================================
-
-tags:
-  - name: Health
-    description: Service health checks
-  - name: Query
-    description: User query processing
-  - name: Users
-    description: User profile management
-  - name: Enrollment
-    description: User enrollment workflow
-  - name: LLM
-    description: Language model operations
-  - name: Vision
-    description: Vision service operations
-  - name: Audio
-    description: Audio service operations
-  - name: TTS
-    description: Text-to-speech operations
-  - name: TeachMe
-    description: Knowledge learning operations
-
-# ============================================================================
-# SECURITY
-# ============================================================================
-
-security:
-  - bearerAuth: []
-
-# ============================================================================
-# METADATA
-# ============================================================================
-
-x-nexi-metadata:
-  phase: "2.0 (Production)"
-  optimization_level: "9.5/10"
-  rate_limits:
-    default: "100 requests/minute per user"
-    llm: "10 requests/minute"
-    enrollment: "5 requests/5 minutes"
-    health: "unlimited (exempt)"
-  timeouts:
-    vision: "5 seconds"
-    audio: "5 seconds"
-    tts: "10 seconds"
-    llm: "15 seconds"
-    enrollment: "30 seconds"
-  features:
-    - "Rate limiting (token bucket)"
-    - "Input validation (XSS, injection prevention)"
-    - "Quantized LLM (8-bit, 2-3x faster)"
-    - "Context awareness"
-    - "Multi-language support"
-    - "Error recovery"
-    - "Service monitoring"
+          type: array
+          title: Tags
+        confidence:
+          type: number
+          maximum: 1.0
+          minimum: 0.0
+          title: Confidence
+          default: 1.0
+      type: object
+      required:
+      - type
+      - data
+      title: LearningRequest
+      description: Mirror TeachMe's typed public learning contract.
+    ObjectData:
+      properties:
+        name:
+          type: string
+          title: Name
+        attributes:
+          additionalProperties: true
+          type: object
+          title: Attributes
+        category:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Category
+        description:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Description
+      type: object
+      required:
+      - name
+      title: ObjectData
+    RAGQueryRequest:
+      properties:
+        query:
+          type: string
+          maxLength: 2000
+          minLength: 1
+          title: Query
+      additionalProperties: false
+      type: object
+      required:
+      - query
+      title: RAGQueryRequest
+    SyncRequest:
+      properties:
+        service_name:
+          type: string
+          title: Service Name
+        items:
+          items:
+            additionalProperties: true
+            type: object
+          type: array
+          title: Items
+      type: object
+      required:
+      - service_name
+      - items
+      title: SyncRequest
+      description: Knowledge sync request
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+        input:
+          title: Input
+        ctx:
+          type: object
+          title: Context
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
+    ErrorBody:
+      type: object
+      required:
+      - status_code
+      - code
+      - message
+      - request_id
+      properties:
+        status_code:
+          type: integer
+        code:
+          type: string
+        message:
+          type: string
+        request_id:
+          type: string
+    ErrorEnvelope:
+      type: object
+      required:
+      - error
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorBody'
+servers:
+- url: http://localhost:8000
+  description: Local service

@@ -11,6 +11,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from shared.security import allowed_origins, InternalRouteAuthMiddleware
+from shared.api_errors import install_error_handlers
 from contextlib import asynccontextmanager
 
 # Setup logging
@@ -151,7 +152,7 @@ def create_app() -> FastAPI:
     )
     app.add_middleware(
         InternalRouteAuthMiddleware,
-        protected_prefixes=("/api/v1/detect", "/api/v1/analyze", "/camera", "/stream", "/live", "/api/face-data"),
+        protected_prefixes=("/api/v1/detect", "/api/v1/analyze", "/api/v1/frame", "/camera", "/stream", "/live", "/api/face-data"),
     )
     
     # Add Phase 1 security: Rate limiting middleware
@@ -163,6 +164,7 @@ def create_app() -> FastAPI:
     app.include_router(detection.router, prefix="/api/v1", tags=["Face Detection"])
     app.include_router(streaming.router, tags=["Video Streaming"])
     app.include_router(camera.router, tags=["Camera Control"])
+    install_error_handlers(app, "vision")
     
     logger.info("FastAPI application created with all routes registered")
     

@@ -40,6 +40,11 @@ class PriorityLevel(IntEnum):
     CRITICAL = VIDEO_CALL
 
 
+class CallState(str, Enum):
+    IDLE = "IDLE"
+    CALL_ACTIVE = "CALL_ACTIVE"
+
+
 @dataclass
 class ResourceLease:
     resource_type: ResourceType
@@ -80,6 +85,9 @@ class ResourceAuthority:
         self.release_ack_timeout = release_ack_timeout
         self.liveness_interval = liveness_interval
         self.focus_mode = FocusModeBroadcast()
+        self.call_state = CallState.IDLE
+        self.active_call_id = None
+        self.active_call_lease_id = None
 
     def request_resource(self, resource_type, service_name, priority, timeout_seconds=30,
                          holder_pid=None, holder_started=None, holder_host=None, holder_port=None,
@@ -198,6 +206,10 @@ class ResourceAuthority:
             lease = self.active_leases.pop(lease_id, None)
             if lease is None:
                 return False
+            if self.active_call_lease_id == lease_id:
+                self.call_state = CallState.IDLE
+                self.active_call_id = None
+                self.active_call_lease_id = None
             if lease.priority == PriorityLevel.ACTIVE_TEACHME:
                 self.focus_mode.clear_teachme(lease.lease_id)
             state = self.resources[lease.resource_type]
@@ -231,6 +243,39 @@ class ResourceAuthority:
 
     def subscribe_focus_mode(self, callback):
         self.focus_mode.subscribe(callback)
+
+    def activate_call(self, call_id, lease_id):
+        """Bind CALL_ACTIVE state to an acknowledged VIDEO_CALL camera lease."""
+        with self._lock:
+            lease = self.active_leases.get(lease_id)
+            if (
+                not call_id
+                or lease is None
+                or lease.resource_type != ResourceType.CAMERA
+                or lease.priority != PriorityLevel.VIDEO_CALL
+                or lease.state != "active"
+            ):
+                return False
+            if self.call_state == CallState.CALL_ACTIVE and self.active_call_lease_id != lease_id:
+                return False
+            self.call_state = CallState.CALL_ACTIVE
+            self.active_call_id = call_id
+            self.active_call_lease_id = lease_id
+            return True
+
+    def get_call_status(self):
+        with self._lock:
+            lease = self.active_leases.get(self.active_call_lease_id)
+            if lease is None and self.active_call_lease_id is not None:
+                self.call_state = CallState.IDLE
+                self.active_call_id = None
+                self.active_call_lease_id = None
+            return {
+                "state": self.call_state.value,
+                "call_id": self.active_call_id,
+                "lease_id": self.active_call_lease_id,
+                "lease_state": lease.state if lease is not None else None,
+            }
 
 
 _authority = ResourceAuthority()

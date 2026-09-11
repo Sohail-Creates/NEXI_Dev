@@ -156,6 +156,8 @@ async def get_user_conversations_endpoint(
             "end_date": end_date
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error retrieving conversations: {e}")
         raise HTTPException(status_code=500, detail=f"Error retrieving conversations: {str(e)}")
@@ -257,6 +259,8 @@ async def get_conversation_statistics(request: Request = None) -> Dict[str, Any]
         
         return stats
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error getting stats: {e}")
         raise HTTPException(status_code=500, detail=f"Error getting stats: {str(e)}")

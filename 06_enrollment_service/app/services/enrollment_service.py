@@ -286,15 +286,14 @@ class EnrollmentService:
     ) -> Dict:
         """
         Add more samples to existing user (OLD samples are KEPT)
-        Note: user_id parameter is actually user_name from the UI
         """
         photo_paths = []
         voice_paths = []
         
         try:
-            # Validate user name format
+            # The route and storage contract both use the durable user_id.
             if not user_id or not isinstance(user_id, str):
-                raise HTTPException(status_code=400, detail="Invalid user name")
+                raise HTTPException(status_code=400, detail="Invalid user_id")
             
             # Validate file counts
             try:
@@ -311,12 +310,12 @@ class EnrollmentService:
             
             print(f"[ImproveTraining] Adding training data for user {user_id}...")
             
-            # Find existing user enrollment by user_name
-            actual_user_id, existing_data = await self.find_enrollment_by_user_name(user_id)
-            if not actual_user_id or not existing_data:
+            actual_user_id = user_id
+            existing_data = await self.storage.get_enrollment_smart(actual_user_id)
+            if not existing_data:
                 raise HTTPException(
                     status_code=404,
-                    detail=f"User '{user_id}' not found in enrollment records"
+                    detail=f"User ID '{user_id}' not found in enrollment records"
                 )
             
             # Save new files
@@ -395,6 +394,7 @@ class EnrollmentService:
             return {
                 "status": "success",
                 "message": f"Training improved for user {user_id}",
+                "user_id": user_id,
                 "total_samples": {
                     "images": existing_data["sample_count"]["images"],
                     "audio": existing_data["sample_count"]["audio"]
@@ -425,9 +425,9 @@ class EnrollmentService:
         voice_paths = []
         
         try:
-            # Validate user name
+            # The route and storage contract both use the durable user_id.
             if not user_id or not isinstance(user_id, str):
-                raise HTTPException(status_code=400, detail="Invalid user name")
+                raise HTTPException(status_code=400, detail="Invalid user_id")
             
             # Validate file counts
             try:
@@ -444,12 +444,12 @@ class EnrollmentService:
             
             print(f"[ReEnrollment] RE-ENROLLING user {user_id}...")
             
-            # Find existing user enrollment by user_name
-            actual_user_id, existing_data = await self.find_enrollment_by_user_name(user_id)
-            if not actual_user_id or not existing_data:
+            actual_user_id = user_id
+            existing_data = await self.storage.get_enrollment_smart(actual_user_id)
+            if not existing_data:
                 raise HTTPException(
                     status_code=404,
-                    detail=f"User '{user_id}' not found in enrollment records"
+                    detail=f"User ID '{user_id}' not found in enrollment records"
                 )
             
             # Save new files
@@ -534,6 +534,7 @@ class EnrollmentService:
             return {
                 "status": "success",
                 "message": f"Model updated for user {user_id}",
+                "user_id": user_id,
                 "total_samples": {
                     "images": 5,
                     "audio": 5

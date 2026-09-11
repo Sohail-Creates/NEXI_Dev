@@ -1,20 +1,22 @@
 from __future__ import annotations
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from shared.security import allowed_origins, InternalRouteAuthMiddleware
-import asyncio
 import sys
 from pathlib import Path
 
-# Make shared modules available before Phase 4 route modules are imported.
+# Make the repository-level shared package available for direct ``python main.py`` startup.
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from shared.security import allowed_origins, InternalRouteAuthMiddleware
+from shared.api_errors import error_response, install_error_handlers
+import asyncio
 
 from sqlite_store import read_records, connect
 from starlette.responses import JSONResponse
 from routes import user_router
 from routes.conversations_routes import router as conversations_router
-from camera_routes import router as camera_router
+from camera_routes import router as camera_router, call_router
 from teachme_routes import router as teachme_router
 from restricted_rag import router as restricted_rag_router
 from resource_routes import router as resource_router
@@ -49,7 +51,7 @@ def create_app() -> FastAPI:
     )
     app.add_middleware(
         InternalRouteAuthMiddleware,
-        protected_prefixes=("/resources", "/camera", "/users/data/add_user"),
+        protected_prefixes=("/resources", "/camera", "/calls", "/users/data/add_user"),
     )
     
     # Add Phase 1 security: Rate limiting middleware
@@ -74,7 +76,7 @@ def create_app() -> FastAPI:
                 response = await call_next(request)
                 if request.state.persistence_failed:
                     connection.rollback()
-                    return JSONResponse(status_code=500, content={"detail": "Failed to persist users"})
+                    return error_response(request, 500, "Failed to persist users")
                 if response.status_code >= 400:
                     connection.rollback()
                 else:
@@ -82,15 +84,17 @@ def create_app() -> FastAPI:
                 return response
             except Exception:
                 connection.rollback()
-                return JSONResponse(status_code=500, content={"detail": "User transaction failed"})
+                return error_response(request, 500, "User transaction failed")
             finally:
                 connection.close()
     app.include_router(user_router)
     app.include_router(conversations_router)
     app.include_router(camera_router)
+    app.include_router(call_router)
     app.include_router(teachme_router)
     app.include_router(restricted_rag_router)
     app.include_router(resource_router)
+    install_error_handlers(app, "central")
     
     # Startup event for TeachMe connector initialization
     @app.on_event("startup")

@@ -7,6 +7,11 @@ Run with: python main.py
 Or: uvicorn teachme_service.app:app --host 0.0.0.0 --port 8004
 """
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 if __name__ == "__main__":
     # Import here to ensure proper module loading
     import uvicorn

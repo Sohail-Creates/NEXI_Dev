@@ -9,7 +9,7 @@ from typing import Optional
 
 from fastapi import HTTPException, Request
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse
+from shared.api_errors import error_response
 
 
 INTERNAL_TOKEN_HEADER = "X-NEXI-Service-Token"
@@ -92,10 +92,7 @@ class InternalRouteAuthMiddleware(BaseHTTPMiddleware):
             and is_protected_path(request.url.path, self.protected_prefixes)
             and not is_internal_request(request)
         ):
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Valid internal service credential required"},
-            )
+            return error_response(request, 401, "Valid internal service credential required")
         return await call_next(request)
 
 
@@ -115,14 +112,14 @@ class UploadGuardMiddleware(BaseHTTPMiddleware):
             max_bytes, allowed_types = rule
             content_type = request.headers.get("content-type", "").lower()
             if not any(content_type.startswith(value) for value in allowed_types):
-                return JSONResponse(status_code=415, content={"detail": "Unsupported upload content type"})
+                return error_response(request, 415, "Unsupported upload content type")
             raw_length = request.headers.get("content-length")
             if raw_length is None:
-                return JSONResponse(status_code=411, content={"detail": "Content-Length required"})
+                return error_response(request, 411, "Content-Length required")
             try:
                 content_length = int(raw_length)
             except ValueError:
-                return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length"})
+                return error_response(request, 400, "Invalid Content-Length")
             if content_length > max_bytes:
-                return JSONResponse(status_code=413, content={"detail": "Upload exceeds configured size limit"})
+                return error_response(request, 413, "Upload exceeds configured size limit")
         return await call_next(request)

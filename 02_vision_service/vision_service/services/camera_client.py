@@ -71,6 +71,27 @@ class CameraResourceClient:
         except (requests.RequestException, ValueError):
             return False
 
+    def validate_delegated_video_lease(self, lease_id, timeout=2):
+        """Validate, without adopting, Central's active VIDEO_CALL camera lease."""
+        try:
+            response = requests.get(
+                self.central_server_url + "/resources/status/" + lease_id,
+                headers=internal_service_headers(),
+                timeout=timeout,
+            )
+            if response.status_code != 200:
+                return False
+            lease = response.json().get("lease", {})
+            return (
+                lease.get("lease_id") == lease_id
+                and lease.get("resource_type") == "camera"
+                and lease.get("priority") == "VIDEO_CALL"
+                and lease.get("state") == "active"
+                and str(lease.get("service_name", "")).startswith("video_call:")
+            )
+        except (requests.RequestException, ValueError, TypeError):
+            return False
+
 
 # Global instance
 _camera_client: Optional[CameraResourceClient] = None
