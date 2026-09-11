@@ -78,5 +78,39 @@ def write_records(table, records, connection=None):
     if conn is None:
         with transaction() as conn:
             return write_records(table, records, conn)
-    conn.execute(f"DELETE FROM {table}")
-    conn.executemany(f"INSERT INTO {table} (position, record) VALUES (?, ?)", enumerate(encoded))
+    if table != "conversations":
+        conn.execute(f"DELETE FROM {table}")
+        conn.executemany(
+            f"INSERT INTO {table} (position, record) VALUES (?, ?)", enumerate(encoded)
+        )
+        return
+
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(conversations)")}
+    if "synced" not in columns:
+        conn.execute("DELETE FROM conversations")
+        conn.executemany(
+            "INSERT INTO conversations (position, record) VALUES (?, ?)", enumerate(encoded)
+        )
+        return
+
+    # Keep outbox state by stable conversation_id across the established
+    # full-list persistence rewrite.
+    previous = {}
+    for row in conn.execute(
+        """SELECT record, synced, batch_id, sync_attempted_at, sync_succeeded_at
+           FROM conversations"""
+    ):
+        conversation_id = json.loads(row[0]).get("conversation_id")
+        if conversation_id:
+            previous[conversation_id] = tuple(row[1:])
+    conn.execute("DELETE FROM conversations")
+    values = []
+    for position, (record, raw) in enumerate(zip(records, encoded)):
+        state = previous.get(record.get("conversation_id"), (0, None, None, None))
+        values.append((position, raw, *state))
+    conn.executemany(
+        """INSERT INTO conversations
+           (position, record, synced, batch_id, sync_attempted_at, sync_succeeded_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        values,
+    )

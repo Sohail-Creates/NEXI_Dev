@@ -12,7 +12,7 @@ from shared.security import allowed_origins, InternalRouteAuthMiddleware
 from shared.api_errors import error_response, install_error_handlers
 import asyncio
 
-from sqlite_store import read_records, connect
+from sqlite_store import DATABASE, read_records, connect
 from starlette.responses import JSONResponse
 from routes import user_router
 from routes.conversations_routes import router as conversations_router
@@ -22,24 +22,15 @@ from restricted_rag import router as restricted_rag_router
 from resource_routes import router as resource_router
 from teachme_connector import init_teachme_connector
 from service_config import get_config
-from services.cloud_sync_service import CloudSyncService
-import os
-
-sync_service = CloudSyncService(
-    history_dir="D:\\TRUSTNEXUS\\NEXI_Refactor\\TN-NEXI\\05_teachme_service\\teachme_service\\data\\history",
-    cloud_url=os.getenv("CLOUD_SYNC_URL", "https://api.yourcloud.com")
-)
-
-async def daily_sync_task():
-    while True:
-        await sync_service.sync_history()
-        await asyncio.sleep(86400) # 24 hours
+from services.cloud_sync_service import CloudSyncService, router as sync_router
+from migrate_cloud_sync_outbox import migrate_outbox
 
 # Import Phase 1 security modules (from shared/)
 from shared.rate_limiter import create_rate_limit_middleware
 
 
 def create_app() -> FastAPI:
+    migrate_outbox(DATABASE)
     app = FastAPI(title="NEXI Central Server", version="1.0.0")
 
     app.add_middleware(
@@ -51,7 +42,7 @@ def create_app() -> FastAPI:
     )
     app.add_middleware(
         InternalRouteAuthMiddleware,
-        protected_prefixes=("/resources", "/camera", "/calls", "/users/data/add_user"),
+        protected_prefixes=("/resources", "/camera", "/calls", "/sync", "/users/data/add_user"),
     )
     
     # Add Phase 1 security: Rate limiting middleware
@@ -61,6 +52,7 @@ def create_app() -> FastAPI:
 
     app.state.db = {"users": read_records("users")}
     app.state.user_store_lock = asyncio.Lock()
+    app.state.cloud_sync_service = CloudSyncService.from_env(DATABASE)
 
     @app.middleware("http")
     async def transactional_users(request, call_next):
@@ -94,6 +86,7 @@ def create_app() -> FastAPI:
     app.include_router(teachme_router)
     app.include_router(restricted_rag_router)
     app.include_router(resource_router)
+    app.include_router(sync_router)
     install_error_handlers(app, "central")
     
     # Startup event for TeachMe connector initialization
@@ -101,15 +94,17 @@ def create_app() -> FastAPI:
     async def startup_event():
         """Initialize services on startup"""
         try:
-            import json
             config = get_config()
             teachme_config = config.services.get_service_configs().get("teachme", {})
             await init_teachme_connector(config=teachme_config)
             print(" TeachMe connector initialized")
-            asyncio.create_task(daily_sync_task())
         except Exception as e:
-            import json
             print(f"Warning: TeachMe connector failed to initialize: {e}")
+        app.state.cloud_sync_service.start()
+
+    @app.on_event("shutdown")
+    async def shutdown_event():
+        await app.state.cloud_sync_service.stop()
 
 
     return app
