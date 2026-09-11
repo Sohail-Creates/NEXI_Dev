@@ -129,9 +129,9 @@ def run_live_openapi_contract() -> None:
 
 
 def test_identity_contract_uses_user_id_end_to_end(monkeypatch) -> None:
-    os.environ["AUTH_ENFORCEMENT_ENABLED"] = "true"
-    os.environ["NEXI_INTERNAL_SERVICE_TOKEN"] = SERVICE_TOKEN
-    os.environ["NEXI_JWT_SECRET"] = "phase6-jwt-secret-with-sufficient-length"
+    monkeypatch.setenv("AUTH_ENFORCEMENT_ENABLED", "true")
+    monkeypatch.setenv("NEXI_INTERNAL_SERVICE_TOKEN", SERVICE_TOKEN)
+    monkeypatch.setenv("NEXI_JWT_SECRET", "phase6-jwt-secret-with-sufficient-length")
 
     central_dir = ROOT / "01_central_server"
     sys.path.insert(0, str(central_dir))
@@ -193,8 +193,8 @@ def test_identity_contract_uses_user_id_end_to_end(monkeypatch) -> None:
 
 
 def test_video_call_preemption_release_and_screenshot(monkeypatch) -> None:
-    os.environ["AUTH_ENFORCEMENT_ENABLED"] = "true"
-    os.environ["NEXI_INTERNAL_SERVICE_TOKEN"] = SERVICE_TOKEN
+    monkeypatch.setenv("AUTH_ENFORCEMENT_ENABLED", "true")
+    monkeypatch.setenv("NEXI_INTERNAL_SERVICE_TOKEN", SERVICE_TOKEN)
 
     central_dir = ROOT / "01_central_server"
     vision_dir = ROOT / "02_vision_service"

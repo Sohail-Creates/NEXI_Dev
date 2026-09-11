@@ -433,7 +433,7 @@ When reading each scenario:
 
 ### SCENARIO 1: Service Health Check
 
-**Test Script:** Option 1 in test_nexi_system_enhanced.py  
+**Design-reference scenario (not regression coverage):** Option 1 in `test_nexi_system_enhanced.py`
 **Duration:** 2-3 seconds  
 **Purpose:** Verify all 7 services are operational before tests
 
@@ -491,7 +491,7 @@ All systems operational. System ready.
 
 ### SCENARIO 2: New User Enrollment (Fatima)
 
-**Test Script:** Option 2 in test_nexi_system_enhanced.py  
+**Design-reference scenario (not regression coverage):** Option 2 in `test_nexi_system_enhanced.py`
 **Duration:** ~2.5-3 minutes  
 **Purpose:** Complete user enrollment workflow with biometric registration  
 **Key Feature Tested:** Resource preemption, atomicity, multi-service coordination
@@ -762,7 +762,7 @@ Next Step:         Say "Hey Nexi" to activate
 
 ### SCENARIO 3: Improve Training - Sara
 
-**Test Script:** Option 3 in test_nexi_system_enhanced.py  
+**Design-reference scenario (not regression coverage):** Option 3 in `test_nexi_system_enhanced.py`
 **Duration:** ~2-3 minutes  
 **Purpose:** Add additional biometric samples to existing user profile  
 **Feature:** Incremental training improvement for better accuracy  
@@ -907,7 +907,7 @@ Accuracy Impact:    +2-3% (incremental)
 
 ### SCENARIO 4: Re-enrollment - Ali
 
-**Test Script:** Option 4 in test_nexi_system_enhanced.py  
+**Design-reference scenario (not regression coverage):** Option 4 in `test_nexi_system_enhanced.py`
 **Duration:** ~2.5-3 minutes  
 **Purpose:** Complete replacement of all biometric data  
 **Scenario:** User's voice changed (illness, puberty) or security refresh needed  
@@ -1042,7 +1042,7 @@ Next Step:         Say "Hey Nexi" to activate with NEW credentials
 
 ### SCENARIO 5: Return User Conversation - Sara
 
-**Test Script:** Option 5 in test_nexi_system_enhanced.py  
+**Design-reference scenario (not regression coverage):** Option 5 in `test_nexi_system_enhanced.py`
 **Duration:** 12-20 seconds per turn (multi-turn loop)  
 **Purpose:** End-to-end conversation with RAG context integration and multi-turn support  
 **User:** Returning user "Sara" (previously enrolled)  
@@ -1390,7 +1390,7 @@ Next Prompt:
 
 ```
 ═══════════════════════════════════════════════════════════════════
-TURN 1: COMPLETE PIPELINE (Code verification from test_nexi_system_enhanced.py)
+TURN 1: DESIGN-REFERENCE PIPELINE (not regression coverage; from test_nexi_system_enhanced.py)
 ═══════════════════════════════════════════════════════════════════
 
 STEP 1-2: Audio Recording (ONCE - Line 1878)
@@ -1559,7 +1559,7 @@ Graceful fallback if service fails
 
 ### SCENARIO 6: Teach Objects - Sara
 
-**Test Script:** Option 6 in test_nexi_system_enhanced.py  
+**Design-reference scenario (not regression coverage):** Option 6 in `test_nexi_system_enhanced.py`
 **Duration:** ~2-3 minutes  
 **Purpose:** Object learning via YOLOv8 computer vision (WORKING FEATURE)  
 **Key Point:** Real object detection (NOT mock) - YOLOv8 neural network processes every frame  
@@ -1834,7 +1834,7 @@ NEXT: User shows pen to camera → NEXI says "I see my favorite pen!"
 
 ### SCENARIO 7: System Settings & Configuration
 
-**Test Script:** Option 7 in test_nexi_system_enhanced.py  
+**Design-reference scenario (not regression coverage):** Option 7 in `test_nexi_system_enhanced.py`
 **Duration:** Interactive menu (5-30 seconds per setting)  
 **Purpose:** Runtime configuration, system diagnostics, circuit breaker testing  
 **Audience:** Test operators, system administrators

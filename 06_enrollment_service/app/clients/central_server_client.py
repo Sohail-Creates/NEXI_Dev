@@ -46,7 +46,7 @@ class CentralServerClient:
             HTTPException: If registration fails
         """
         # Check circuit breaker
-        if not self.circuit_breaker.can_request():
+        if not self.circuit_breaker.is_available():
             logger.error("Circuit breaker OPEN: Central Server unavailable")
             raise HTTPException(
                 status_code=503,

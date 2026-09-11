@@ -155,7 +155,7 @@ d:\Internship\TN_Team\Nexi_Robo/
 │   ├── encryption.key - Unknown purpose
 │   │
 │   └── [TEST & INTEGRATION FILES]
-│       ├── test_nexi_system_enhanced.py (2,367 lines) - Main integration test suite
+│       ├── test_nexi_system_enhanced.py (2,367 lines) - Design-reference harness (non-regression)
 │       ├── llm_context_builder.py - RAG context aggregator
 │       ├── cached_voice_player.py - TTS cache management
 │       ├── knowledge_data.json - Serialized facts database
@@ -486,7 +486,7 @@ d:\Internship\TN_Team\Nexi_Robo/
 │
 ├── [TESTS] (Test Suite)
 │   ├── __init__.py
-│   ├── test_nexi_system_enhanced.py - Main integration tests
+│   ├── test_nexi_system_enhanced.py - Design-reference harness (non-regression)
 │   ├── verify_llm_service.py - LLM service tests
 │   ├── test_fastest_emotion.py - Emotion detection tests
 │   ├── test_object_detection.py - Object detection tests
@@ -524,7 +524,7 @@ d:\Internship\TN_Team\Nexi_Robo/
 | **Configuration Files** | 8 | .env, pyrightconfig.json, pytest.ini, tts_preferences.json, etc |
 | **Documentation Files (.md)** | 7 | README, VISION_SERVICE_ANALYSIS, DEPLOYMENT_GUIDE, etc |
 | **Model Files (.h5, .bin, .pth)** | ~50+ | Deep learning models (DeepFace, FER, SmolLM2, voice models) |
-| **Test Files** | 6 | test_nexi_system_enhanced.py, test_fastest_emotion.py, etc |
+| **Test Files** | 17 | 9 maintained/layered files, 7 external hardware/service diagnostics, 1 design-reference harness |
 | **Data Files (.json)** | 5 | users.json, conversations.json, knowledge_data.json, etc |
 | **Voice/Audio Files** | ~200+ | Cached TTS output, recordings |
 | **Directories** | 28 | Service packages, utilities, data, logs |
@@ -1790,7 +1790,11 @@ System Total (all running): ~8.0GB
 
 ### 9.3 Test Coverage & Validation
 
-**Integration Test Results (test_nexi_system_enhanced.py):**
+**Design-reference scenarios (`test_nexi_system_enhanced.py`; not regression evidence):**
+
+Phase 8 confirmed that this interactive harness targets the unmounted
+`LLMContextBuilder`/root orchestration design. The historical results below are
+retained as design notes only and are excluded from pytest's regression gate.
 
 | Test Scenario | Status | Issues | Notes |
 |---|---|---|---|
@@ -1803,11 +1807,9 @@ System Total (all running): ~8.0GB
 | Option 7: Settings Configuration | Pass | None | UI configuration working |
 
 **Coverage Statistics:**
-- Integration test file: 2,367 lines (2,100 test code, 267 utilities)
-- Test scenarios: 7 major end-to-end flows
-- Services tested: 7/7
-- Critical paths covered: 6/7 (missing explicit error scenarios)
-- **Overall test coverage: ~30-40%** (integration heavy, unit tests light)
+- Design-reference file: retained, explicitly excluded from live coverage counts
+- Maintained regression entry point: `.\venv\Scripts\python.exe -m pytest`
+- Live coverage statistics: reported by the Phase 8 layered pytest summary
 
 ---
 
@@ -1896,8 +1898,8 @@ System Total (all running): ~8.0GB
 
 | Test Type | Coverage | Status | Details |
 |-----------|----------|--------|---------|
-| Unit Tests | 0% | Not Implemented | No pytest suite for individual functions |
-| Integration Tests | 95% | Implemented | test_nexi_system_enhanced.py covers 7 major scenarios |
+| Unit Tests | Standing suite | Implemented | Select with `pytest -m unit` |
+| Integration Tests | Standing suite | Implemented | Select with `pytest -m integration` |
 | Manual Testing | 100% | Complete | All user workflows tested manually by team |
 | Performance Testing | 60% | Partial | Latency measured on happy path, no load testing beyond 50 users |
 | Security Testing | 0% | Not Done | No penetration testing or security audit completed |
@@ -1905,7 +1907,7 @@ System Total (all running): ~8.0GB
 
 ### 11.2 Integration Test Scenarios
 
-**File:** test_nexi_system_enhanced.py (2,367 lines)
+**Design-reference file (excluded from regression):** `test_nexi_system_enhanced.py`
 
 | Scenario | Status | Pass Rate | Notes |
 |----------|--------|-----------|-------|
@@ -1917,7 +1919,8 @@ System Total (all running): ~8.0GB
 | Option 6: Teach Objects (Sara) | Pass | 100% | YOLO object detection, embedding storage working |
 | Option 7: Settings Configuration | Pass | 100% | User preferences and voice settings |
 
-**Overall Test Results:** 7/7 scenarios operational, 95%+ reliability
+**Historical design scenario results only:** these rows are not live coverage and
+must not be used as a release-gate pass count.
 
 ### 11.3 Feature Validation Tests
 

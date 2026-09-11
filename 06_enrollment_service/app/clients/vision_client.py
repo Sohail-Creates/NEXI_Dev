@@ -53,7 +53,7 @@ class VisionClient:
                         files = {'file': (os.path.basename(image_path), f, 'image/jpeg')}
                         
                         response = await client.post(
-                            f"{self.base_url}/process-face",
+                            f"{self.base_url}/api/v1/detect/faces/upload",
                             files=files,
                         )
                     
@@ -74,18 +74,20 @@ class VisionClient:
                         logger.error(f"Invalid Vision Service response format: {type(result)}")
                         raise HTTPException(status_code=503, detail="Invalid response format")
                     
-                    # Check if face was detected
-                    if not result.get("face_detected"):
+                    # Vision's authoritative response is a collection; enrollment
+                    # consumes the first detected face from the uploaded sample.
+                    faces = result.get("faces")
+                    if not isinstance(faces, list) or not faces:
                         raise HTTPException(status_code=400, detail="No face detected in image")
-                    
-                    # Validate embeddings exist
-                    if not result.get("embedding"):
+
+                    face = faces[0]
+                    if not isinstance(face, dict) or not face.get("embedding"):
                         logger.error("Vision Service didn't return face embedding")
                         raise HTTPException(status_code=503, detail="Failed to extract face data")
                     
                     return {
-                        "embedding": result.get("embedding"),
-                        "confidence": float(result.get("confidence", 0.0)),
+                        "embedding": face["embedding"],
+                        "confidence": float(face.get("confidence", 0.0)),
                         "face_detected": True
                     }
                     

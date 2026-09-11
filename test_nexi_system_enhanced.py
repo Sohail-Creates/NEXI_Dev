@@ -1,4 +1,10 @@
-"""
+"""DESIGN REFERENCE ONLY -- NOT A PRODUCTION REGRESSION TEST.
+
+This interactive harness exercises ``LLMContextBuilder`` and the root-level
+orchestration design, neither of which is mounted by Central's authoritative
+``main:app``.  It is intentionally excluded from default pytest collection;
+the maintained regression pyramid lives under ``tests/``.
+
 NEXI System - Complete Integration Test Suite v2.0
 User-Centric Scenarios with Production Feature Validation
 
@@ -16,6 +22,10 @@ Author: Sohail Aslam
 Version: 2.0
 Date: 2026-02-28
 """
+
+import pytest
+
+pytestmark = pytest.mark.design_reference
 
 import requests
 import sounddevice as sd
