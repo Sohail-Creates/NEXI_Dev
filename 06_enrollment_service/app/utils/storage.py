@@ -8,15 +8,19 @@ from datetime import datetime
 from typing import Dict, List, Optional
 from pathlib import Path
 from app.utils.encryption import get_encryption_manager
+from shared.secure_storage import require_encryption_enabled
 
 
 class EnrollmentStorage:
     """Handles secure storage of enrollment data"""
     
     def __init__(self, storage_dir: str = "./enrollment_data", enable_encryption: bool = True):
+        require_encryption_enabled()
+        if not enable_encryption:
+            raise RuntimeError("Enrollment metadata encryption is mandatory")
         self.storage_dir = storage_dir
-        self.enable_encryption = enable_encryption
-        self.encryption_manager = get_encryption_manager() if enable_encryption else None
+        self.enable_encryption = True
+        self.encryption_manager = get_encryption_manager()
         
         # Create storage directory
         os.makedirs(storage_dir, exist_ok=True)

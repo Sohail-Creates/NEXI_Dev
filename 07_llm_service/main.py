@@ -15,6 +15,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from shared.security import allowed_origins, InternalRouteAuthMiddleware
 from shared.api_errors import install_error_handlers
+from shared.request_middleware import install_request_observability
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -73,6 +74,7 @@ app.include_router(create_generation_routes(openrouter_client))
 app.include_router(create_format_router(None))  # model_loader removed
 app.add_middleware(InternalRouteAuthMiddleware, protected_prefixes=("/api/v1/generate",))
 install_error_handlers(app, "llm")
+install_request_observability(app, "llm")
 
 @app.get("/", tags=["info"])
 async def root():
@@ -84,4 +86,5 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host=HOST, port=PORT)
+    from config.ssl_config import get_tls_config
+    uvicorn.run(app, host=HOST, port=PORT, **get_tls_config().uvicorn_kwargs())

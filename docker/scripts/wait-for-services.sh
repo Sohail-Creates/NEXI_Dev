@@ -16,25 +16,25 @@ for SERVICE in "${SERVICE_LIST[@]}"; do
     
     case $SERVICE in
         central)
-            URL="http://central:8000/health"
+            URL="https://central:8000/health"
             ;;
         vision)
-            URL="http://vision:8001/health"
+            URL="https://vision:8001/health"
             ;;
         audio)
-            URL="http://audio:8002/health"
+            URL="https://audio:8002/health"
             ;;
         tts)
-            URL="http://tts:8003/health"
+            URL="https://tts:8003/health"
             ;;
         teachme)
-            URL="http://teachme:8004/health"
+            URL="https://teachme:8004/health"
             ;;
         enrollment)
-            URL="http://enrollment:8005/health"
+            URL="https://enrollment:8005/health"
             ;;
         llm)
-            URL="http://llm:8006/api/v1/health"
+            URL="https://llm:8006/api/v1/health"
             ;;
         *)
             echo "Unknown service: $SERVICE"
@@ -43,7 +43,7 @@ for SERVICE in "${SERVICE_LIST[@]}"; do
     esac
     
     for i in {1..30}; do
-        if curl -sf "$URL" > /dev/null 2>&1; then
+        if curl -sf --cacert "${NEXI_TLS_CA_FILE:?TLS CA path required}" "$URL" > /dev/null 2>&1; then
             echo "✓ $SERVICE is ready"
             break
         fi

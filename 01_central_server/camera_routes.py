@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel, Field
 from resource_authority import get_resource_authority, ResourceType, PriorityLevel
 from shared.security import internal_service_headers
+from config.ssl_config import client_verify
 
 router = APIRouter(prefix="/camera", tags=["camera"])
 
@@ -23,7 +24,7 @@ class CallRequest(BaseModel):
 
 CALL_PREEMPTION_TIMEOUT_SECONDS = float(os.getenv("CALL_PREEMPTION_TIMEOUT_SECONDS", "5"))
 CALL_LEASE_TIMEOUT_SECONDS = float(os.getenv("CALL_LEASE_TIMEOUT_SECONDS", "3600"))
-VISION_SERVICE_URL = os.getenv("VISION_SERVICE_URL", "http://localhost:8001").rstrip("/")
+VISION_SERVICE_URL = os.getenv("VISION_SERVICE_URL", "https://localhost:8001").rstrip("/")
 
 @router.post("/request")
 def request_camera(request: CameraRequest):
@@ -107,7 +108,7 @@ async def get_call_status():
 
 
 async def _fetch_vision_frame(lease_id: str) -> tuple[bytes, str]:
-    async with httpx.AsyncClient(timeout=10.0, headers=internal_service_headers()) as client:
+    async with httpx.AsyncClient(timeout=10.0, headers=internal_service_headers(), verify=client_verify(VISION_SERVICE_URL)) as client:
         response = await client.get(f"{VISION_SERVICE_URL}/api/v1/frame", params={"lease_id": lease_id})
     if response.status_code != 200:
         raise HTTPException(

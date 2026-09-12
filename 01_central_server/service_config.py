@@ -39,12 +39,12 @@ class LoggingConfig:
 @dataclass
 class ServiceConfig:
     """Service configuration - service URLs with retry/timeout settings."""
-    audio_url: str = "http://localhost:8002"
-    vision_url: str = "http://localhost:8001"
-    tts_url: str = "http://localhost:8003"
-    enrollment_url: str = "http://localhost:8005"
-    teachme_url: str = "http://localhost:8004"
-    llm_url: str = "http://localhost:8006"
+    audio_url: str = "https://localhost:8002"
+    vision_url: str = "https://localhost:8001"
+    tts_url: str = "https://localhost:8003"
+    enrollment_url: str = "https://localhost:8005"
+    teachme_url: str = "https://localhost:8004"
+    llm_url: str = "https://localhost:8006"
     
     def get_service_configs(self) -> Dict[str, Dict[str, Any]]:
         """Return proper config dicts for each service with circuit breaker settings."""

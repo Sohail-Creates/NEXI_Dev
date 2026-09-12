@@ -3,13 +3,14 @@ import os
 from typing import Dict, Optional
 from fastapi import HTTPException
 from shared.security import internal_service_headers
+from config.ssl_config import client_verify
 
 
 class UserCheckService:
     """Service to check if user exists in Central Server"""
     
     def __init__(self):
-        self.central_server_url = os.getenv("CENTRAL_SERVER_URL", "http://localhost:8000")
+        self.central_server_url = os.getenv("CENTRAL_SERVER_URL", "https://localhost:8000")
         self.timeout = int(os.getenv("SERVICE_TIMEOUT", 30))
     
     async def check_user_exists(self, user_name: str) -> Dict:
@@ -23,7 +24,7 @@ class UserCheckService:
             Dict with user existence info
         """
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, verify=client_verify(self.central_server_url)) as client:
                 response = await client.get(
                     f"{self.central_server_url}/users/check",
                     params={"name": user_name},

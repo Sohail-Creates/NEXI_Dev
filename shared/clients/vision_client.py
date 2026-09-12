@@ -7,6 +7,7 @@ Every method wraps the HTTP call in the circuit breaker.
 """
 
 import httpx
+from config.ssl_config import client_verify
 from shared.security import internal_service_headers
 import logging
 from ..utils.circuit_breaker import CircuitBreaker, CircuitBreakerException
@@ -65,7 +66,7 @@ class VisionServiceClient:
                     error_message="Vision Service is temporarily unavailable"
                 )
 
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, verify=client_verify(self.base_url)) as client:
                 files = {"file": (filename, image_file_bytes, "image/jpeg")}
                 response = await client.post(
                     f"{self.base_url}/process-face",
@@ -115,7 +116,7 @@ class VisionServiceClient:
         Used to determine if service is up.
         """
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(3.0)) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(3.0), verify=client_verify(self.base_url)) as client:
                 response = await client.get(f"{self.base_url}/health")
                 if response.status_code == 200:
                     return ServiceCallResult(

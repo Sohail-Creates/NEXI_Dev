@@ -6,6 +6,7 @@ Handles text-to-speech synthesis in multiple languages and voices.
 """
 
 import httpx
+from config.ssl_config import client_verify
 from shared.security import internal_service_headers
 import logging
 from ..utils.circuit_breaker import CircuitBreaker
@@ -84,7 +85,7 @@ class TTSServiceClient:
             }
             voice_id = voice_mapping.get(voice, voice)
 
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, verify=client_verify(self.base_url)) as client:
                 payload = {
                     "text": text,
                     "voice_id": voice_id
@@ -141,7 +142,7 @@ class TTSServiceClient:
         Used to determine if service is up.
         """
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(3.0)) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(3.0), verify=client_verify(self.base_url)) as client:
                 response = await client.get(f"{self.base_url}/health")
                 if response.status_code == 200:
                     return ServiceCallResult(
@@ -174,7 +175,7 @@ class TTSServiceClient:
             ServiceCallResult with list of available voices
         """
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, verify=client_verify(self.base_url)) as client:
                 response = await client.get(f"{self.base_url}/voices")
                 
                 if response.status_code == 200:

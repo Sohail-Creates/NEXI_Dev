@@ -5,11 +5,12 @@ import os
 import psutil
 from typing import Optional
 from shared.security import internal_service_headers
+from config.ssl_config import client_verify
 
 logger = logging.getLogger(__name__)
 
 class CameraResourceClient:
-    def __init__(self, central_server_url="http://localhost:8000", service_name="vision_service"):
+    def __init__(self, central_server_url="https://localhost:8000", service_name="vision_service"):
         self.central_server_url = central_server_url.rstrip("/")
         self.service_name = service_name
         self.camera_granted = False
@@ -26,7 +27,7 @@ class CameraResourceClient:
                         "priority": "BACKGROUND", "timeout_seconds": timeout,
                         "holder_pid": os.getpid(), "holder_started": psutil.Process().create_time(),
                         "holder_port": int(os.getenv("VISION_PORT", "8001"))},
-                headers=internal_service_headers(), timeout=timeout)
+                headers=internal_service_headers(), timeout=timeout, verify=client_verify(self.central_server_url))
             response.raise_for_status()
             data = response.json()
             self.lease_id = data.get("lease_id")
@@ -34,7 +35,7 @@ class CameraResourceClient:
                 self.release_camera(timeout)
                 return False
             response = requests.post(self.central_server_url + "/resources/acknowledge/" + self.lease_id,
-                                     headers=internal_service_headers(), timeout=timeout)
+                                     headers=internal_service_headers(), timeout=timeout, verify=client_verify(self.central_server_url))
             response.raise_for_status()
             data = response.json()
             self.camera_granted = data.get("granted") is True and data.get("lease_id") == self.lease_id
@@ -54,7 +55,7 @@ class CameraResourceClient:
             return True
         try:
             response = requests.post(self.central_server_url + "/resources/release/" + lease_id,
-                                     params={"forced": forced}, headers=internal_service_headers(), timeout=timeout)
+                                     params={"forced": forced}, headers=internal_service_headers(), timeout=timeout, verify=client_verify(self.central_server_url))
             if response.status_code == 404 or (response.status_code == 200 and response.json().get("success") is True):
                 if self.lease_id == lease_id:
                     self.lease_id = None
@@ -66,7 +67,7 @@ class CameraResourceClient:
     def lease_active(self, lease_id, timeout=1):
         try:
             response = requests.get(self.central_server_url + "/resources/status/" + lease_id,
-                                    headers=internal_service_headers(), timeout=timeout)
+                                    headers=internal_service_headers(), timeout=timeout, verify=client_verify(self.central_server_url))
             return response.status_code == 200 and response.json().get("lease", {}).get("state") == "active"
         except (requests.RequestException, ValueError):
             return False
@@ -77,7 +78,7 @@ class CameraResourceClient:
             response = requests.get(
                 self.central_server_url + "/resources/status/" + lease_id,
                 headers=internal_service_headers(),
-                timeout=timeout,
+                timeout=timeout, verify=client_verify(self.central_server_url),
             )
             if response.status_code != 200:
                 return False
@@ -97,7 +98,7 @@ class CameraResourceClient:
 _camera_client: Optional[CameraResourceClient] = None
 
 
-def initialize_camera_client(central_server_url: str = "http://localhost:8000",
+def initialize_camera_client(central_server_url: str = "https://localhost:8000",
                               service_name: str = "vision_service") -> CameraResourceClient:
     """Initialize the global camera client instance"""
     global _camera_client
@@ -105,7 +106,7 @@ def initialize_camera_client(central_server_url: str = "http://localhost:8000",
     return _camera_client
 
 
-def get_camera_client(central_server_url: str = "http://localhost:8000",
+def get_camera_client(central_server_url: str = "https://localhost:8000",
                       service_name: str = "vision_service") -> CameraResourceClient:
     """Get or create global camera client instance"""
     global _camera_client

@@ -1,312 +1,134 @@
-"""
-HTTPS/TLS Configuration Module for NEXI Services
-Handles SSL/TLS certificate generation and management
-Supports both self-signed and Let's Encrypt certificates
-"""
+"""One TLS configuration for all NEXI service servers and clients."""
 
-import ssl
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+import ipaddress
 import os
 from pathlib import Path
-from typing import Optional, Dict, Any
-import logging
-from dataclasses import dataclass
-from datetime import datetime, timedelta
+import ssl
 
-logger = logging.getLogger(__name__)
-
-
-@dataclass
-class SSLConfig:
-    """SSL/TLS configuration"""
-    enabled: bool = True
-    cert_file: Optional[str] = None
-    key_file: Optional[str] = None
-    keyfile_password: Optional[str] = None
-    ca_certs: Optional[str] = None
-    verify_mode: str = "CERT_REQUIRED"
-    protocols: str = "TLSv1_2,TLSv1_3"
-    ciphers: Optional[str] = None
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 
-class SSLContextManager:
-    """Manage SSL/TLS contexts for services"""
-    
-    def __init__(self, cert_dir: str = "config/certificates"):
-        """
-        Initialize SSL context manager
-        
-        Args:
-            cert_dir: Directory for storing certificates
-        """
-        self.cert_dir = Path(cert_dir)
-        self.cert_dir.mkdir(parents=True, exist_ok=True)
-        self.contexts: Dict[str, ssl.SSLContext] = {}
-    
-    def create_ssl_context(
-        self,
-        service_name: str,
-        cert_file: Optional[str] = None,
-        key_file: Optional[str] = None,
-        ca_file: Optional[str] = None,
-        server_side: bool = True,
-        verify_mode: str = "CERT_REQUIRED"
-    ) -> ssl.SSLContext:
-        """
-        Create SSL context for a service.
-        
-        Args:
-            service_name: Name of the service
-            cert_file: Path to certificate file
-            key_file: Path to private key file
-            ca_file: Path to CA certificate file
-            server_side: True for server, False for client
-            verify_mode: Certificate verification mode
-        
-        Returns:
-            ssl.SSLContext configured for the service
-        """
-        # Use TLSv1.2+ only (no SSLv3, TLSv1.0, TLSv1.1)
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER if server_side else ssl.PROTOCOL_TLS_CLIENT)
-        
-        # Set secure options
-        context.options |= ssl.OP_NO_TLSv1 | ssl.OP_NO_TLSv1_1
-        context.options |= ssl.OP_CIPHER_SERVER_PREFERENCE
-        
-        # Load certificates if provided
-        if cert_file and key_file:
-            try:
-                context.load_cert_chain(cert_file, keyfile=key_file)
-                logger.info(f"SSL: Loaded certificate for {service_name} from {cert_file}")
-            except ssl.SSLError as e:
-                logger.error(f"SSL: Failed to load certificate for {service_name}: {e}")
-                raise
-        
-        # Load CA certificates if provided
-        if ca_file:
-            try:
-                context.load_verify_locations(ca_file)
-                logger.info(f"SSL: Loaded CA certificates from {ca_file}")
-            except ssl.SSLError as e:
-                logger.error(f"SSL: Failed to load CA certificates: {e}")
-                raise
-        
-        # Set verification mode
-        if verify_mode == "CERT_REQUIRED":
-            context.verify_mode = ssl.CERT_REQUIRED
-            context.check_hostname = True
-        elif verify_mode == "CERT_OPTIONAL":
-            context.verify_mode = ssl.CERT_OPTIONAL
-        else:
-            context.verify_mode = ssl.CERT_NONE
-            context.check_hostname = False
-        
-        self.contexts[service_name] = context
-        return context
-    
-    def get_context(self, service_name: str) -> Optional[ssl.SSLContext]:
-        """Get cached SSL context for a service"""
-        return self.contexts.get(service_name)
-    
-    def generate_self_signed_cert(
-        self,
-        service_name: str,
-        days: int = 365
-    ) -> tuple[str, str]:
-        """
-        Generate self-signed certificate for development.
-        
-        Args:
-            service_name: Name of the service
-            days: Certificate validity in days
-        
-        Returns:
-            Tuple of (cert_file, key_file) paths
-        """
-        cert_file = self.cert_dir / f"{service_name}.crt"
-        key_file = self.cert_dir / f"{service_name}.key"
-        
-        # Check if certificates already exist
-        if cert_file.exists() and key_file.exists():
-            logger.info(f"SSL: Self-signed certificate already exists for {service_name}")
-            return str(cert_file), str(key_file)
-        
-        # Generate self-signed certificate
-        try:
-            import subprocess
-            command = [
-                "openssl", "req", "-x509", "-newkey", "rsa:2048",
-                "-keyout", str(key_file),
-                "-out", str(cert_file),
-                "-days", str(days),
-                "-nodes",
-                "-subj", f"/CN={service_name}"
-            ]
-            
-            subprocess.run(command, check=True, capture_output=True)
-            logger.info(f"SSL: Generated self-signed certificate for {service_name}")
-            return str(cert_file), str(key_file)
-        
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            logger.error(f"SSL: Failed to generate self-signed certificate: {e}")
-            raise
-    
-    def validate_certificate(self, cert_file: str) -> Dict[str, Any]:
-        """
-        Validate a certificate file.
-        
-        Args:
-            cert_file: Path to certificate file
-        
-        Returns:
-            Dictionary with certificate details
-        """
-        try:
-            import ssl
-            cert_data = ssl.DER_cert_to_PEM_cert(
-                open(cert_file, 'rb').read()
-            )
-            
-            # Parse certificate info
-            from cryptography import x509
-            from cryptography.hazmat.backends import default_backend
-            
-            cert = x509.load_pem_x509_certificate(
-                cert_data.encode(),
-                default_backend()
-            )
-            
-            return {
-                "subject": cert.subject.rfc4514_string(),
-                "issuer": cert.issuer.rfc4514_string(),
-                "not_before": cert.not_valid_before,
-                "not_after": cert.not_valid_after,
-                "valid": cert.not_valid_before <= datetime.utcnow() <= cert.not_valid_after,
-                "days_until_expiry": (cert.not_valid_after - datetime.utcnow()).days
-            }
-        except Exception as e:
-            logger.error(f"SSL: Failed to validate certificate: {e}")
-            return {"valid": False, "error": str(e)}
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_CERT_DIR = ROOT / "config" / "certificates"
+_TRUE = {"1", "true", "yes", "on"}
 
 
-class HTTPSConfig:
-    """HTTPS configuration for FastAPI services"""
-    
-    def __init__(self, ssl_config: SSLConfig, service_name: str = "default"):
-        """
-        Initialize HTTPS configuration
-        
-        Args:
-            ssl_config: SSL configuration
-            service_name: Name of the service
-        """
-        self.ssl_config = ssl_config
-        self.service_name = service_name
-        self.context_manager = SSLContextManager()
-    
-    @property
-    def is_enabled(self) -> bool:
-        """Check if HTTPS is enabled"""
-        return self.ssl_config.enabled
-    
-    @property
-    def ssl_context(self) -> Optional[ssl.SSLContext]:
-        """Get SSL context for FastAPI"""
-        if not self.is_enabled:
-            return None
-        
-        if not self.ssl_config.cert_file or not self.ssl_config.key_file:
-            return None
-        
-        try:
-            return self.context_manager.create_ssl_context(
-                self.service_name,
-                cert_file=self.ssl_config.cert_file,
-                key_file=self.ssl_config.key_file,
-                ca_file=self.ssl_config.ca_certs,
-                verify_mode=self.ssl_config.verify_mode
-            )
-        except ssl.SSLError as e:
-            logger.error(f"Failed to create SSL context: {e}")
-            return None
-    
-    @property
-    def uvicorn_config(self) -> Dict[str, Any]:
-        """Get Uvicorn configuration for HTTPS"""
-        if not self.is_enabled:
-            return {}
-        
-        return {
-            "ssl_keyfile": self.ssl_config.key_file,
-            "ssl_certfile": self.ssl_config.cert_file,
-            "ssl_ca_certs": self.ssl_config.ca_certs,
-            "ssl_version": ssl.PROTOCOL_TLS_SERVER,
-            "ssl_cert_reqs": 0,  # ssl.VerifyMode.CERT_NONE
-            "ssl_ciphers": self.ssl_config.ciphers
-        }
-    
-    def get_uvicorn_kwargs(self) -> Dict[str, Any]:
-        """Get all Uvicorn SSL/TLS kwargs"""
-        kwargs = {}
-        
-        if self.ssl_config.enabled and self.ssl_config.cert_file and self.ssl_config.key_file:
-            kwargs["ssl_keyfile"] = self.ssl_config.key_file
-            kwargs["ssl_certfile"] = self.ssl_config.cert_file
-            
-            if self.ssl_config.ca_certs:
-                kwargs["ssl_ca_certs"] = self.ssl_config.ca_certs
-        
-        return kwargs
+@dataclass(frozen=True)
+class TLSConfig:
+    enabled: bool
+    cert_file: Path
+    key_file: Path
+    ca_file: Path
+    plaintext_transition: bool
+
+    @classmethod
+    def from_env(cls) -> "TLSConfig":
+        cert_dir = Path(os.getenv("NEXI_TLS_CERT_DIR", str(DEFAULT_CERT_DIR))).resolve()
+        return cls(
+            enabled=os.getenv("NEXI_TLS_ENABLED", "true").strip().lower() in _TRUE,
+            cert_file=Path(os.getenv("NEXI_TLS_CERT_FILE", str(cert_dir / "nexi-local.crt"))).resolve(),
+            key_file=Path(os.getenv("NEXI_TLS_KEY_FILE", str(cert_dir / "nexi-local.key"))).resolve(),
+            ca_file=Path(os.getenv("NEXI_TLS_CA_FILE", str(cert_dir / "nexi-local-ca.crt"))).resolve(),
+            plaintext_transition=os.getenv("NEXI_TLS_ALLOW_PLAINTEXT", "false").strip().lower() in _TRUE,
+        )
+
+    def validate(self) -> None:
+        if not self.enabled:
+            return
+        missing = [str(path) for path in (self.cert_file, self.key_file, self.ca_file) if not path.is_file()]
+        if missing:
+            raise RuntimeError("TLS is enabled but certificate material is missing: " + ", ".join(missing))
+
+    def uvicorn_kwargs(self) -> dict[str, str]:
+        self.validate()
+        return {"ssl_certfile": str(self.cert_file), "ssl_keyfile": str(self.key_file)} if self.enabled else {}
 
 
-# ============================================================================
-# CERTIFICATE UTILITIES
-# ============================================================================
-
-def setup_development_certificates(services: list[str], cert_dir: str = "config/certificates") -> Dict[str, tuple[str, str]]:
-    """
-    Setup self-signed certificates for all services (development only).
-    
-    Args:
-        services: List of service names
-        cert_dir: Directory for storing certificates
-    
-    Returns:
-        Dictionary mapping service names to (cert_file, key_file) tuples
-    """
-    manager = SSLContextManager(cert_dir)
-    certs = {}
-    
-    for service in services:
-        try:
-            cert_file, key_file = manager.generate_self_signed_cert(service)
-            certs[service] = (cert_file, key_file)
-        except Exception as e:
-            logger.error(f"Failed to setup certificate for {service}: {e}")
-    
-    return certs
+def get_tls_config() -> TLSConfig:
+    return TLSConfig.from_env()
 
 
-def get_ssl_config(
-    enabled: bool = True,
-    cert_file: Optional[str] = None,
-    key_file: Optional[str] = None,
-    ca_certs: Optional[str] = None
-) -> SSLConfig:
-    """
-    Create SSL configuration
-    
-    Args:
-        enabled: Enable HTTPS
-        cert_file: Path to certificate file
-        key_file: Path to private key file
-        ca_certs: Path to CA certificate file
-    
-    Returns:
-        SSLConfig instance
-    """
-    return SSLConfig(
-        enabled=enabled,
-        cert_file=cert_file,
-        key_file=key_file,
-        ca_certs=ca_certs
+def client_verify(url: str | None = None) -> bool | str:
+    """Return a trusted CA path for HTTPS; never permit verify=False."""
+    if url is not None and not url.lower().startswith("https://"):
+        return True
+    config = get_tls_config()
+    if config.enabled:
+        if not config.ca_file.is_file():
+            raise RuntimeError(f"TLS trust bundle is missing: {config.ca_file}")
+        return str(config.ca_file)
+    return True
+
+
+def client_ssl_context(url: str | None = None) -> ssl.SSLContext | None:
+    if url is not None and not url.lower().startswith("https://"):
+        return None
+    verify = client_verify(url)
+    return ssl.create_default_context(cafile=verify) if isinstance(verify, str) else ssl.create_default_context()
+
+
+def generate_local_certificates(cert_dir: Path = DEFAULT_CERT_DIR) -> TLSConfig:
+    """Generate a self-signed local CA and a CA-verified localhost certificate."""
+    cert_dir.mkdir(parents=True, exist_ok=True)
+    ca_key_path = cert_dir / "nexi-local-ca.key"
+    ca_cert_path = cert_dir / "nexi-local-ca.crt"
+    key_path = cert_dir / "nexi-local.key"
+    cert_path = cert_dir / "nexi-local.crt"
+    now = datetime.now(timezone.utc)
+
+    ca_key = rsa.generate_private_key(public_exponent=65537, key_size=3072)
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "NEXI Local Verification CA")])
+    ca_cert = (
+        x509.CertificateBuilder().subject_name(ca_name).issuer_name(ca_name)
+        .public_key(ca_key.public_key()).serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=5)).not_valid_after(now + timedelta(days=30))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .add_extension(x509.KeyUsage(True, False, False, False, False, True, True, False, False), critical=True)
+        .sign(ca_key, hashes.SHA256())
     )
+
+    service_key = rsa.generate_private_key(public_exponent=65537, key_size=3072)
+    service_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
+    sans = [x509.DNSName("localhost"), x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]
+    sans.extend(x509.DNSName(name) for name in ("central", "vision", "audio", "tts", "teachme", "enrollment", "llm"))
+    service_cert = (
+        x509.CertificateBuilder().subject_name(service_name).issuer_name(ca_name)
+        .public_key(service_key.public_key()).serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=5)).not_valid_after(now + timedelta(days=30))
+        .add_extension(x509.SubjectAlternativeName(sans), critical=False)
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+        .sign(ca_key, hashes.SHA256())
+    )
+
+    no_encryption = serialization.NoEncryption()
+    ca_key_path.write_bytes(ca_key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, no_encryption))
+    ca_cert_path.write_bytes(ca_cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(service_key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, no_encryption))
+    cert_path.write_bytes(service_cert.public_bytes(serialization.Encoding.PEM))
+    for path in (ca_key_path, key_path):
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
+    return TLSConfig(True, cert_path, key_path, ca_cert_path, False)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--generate-local", action="store_true")
+    parser.add_argument("--cert-dir", type=Path, default=DEFAULT_CERT_DIR)
+    args = parser.parse_args()
+    if args.generate_local:
+        generated = generate_local_certificates(args.cert_dir.resolve())
+        print(f"TLS_CA={generated.ca_file}")
+        print(f"TLS_CERT={generated.cert_file}")
+        print(f"TLS_KEY={generated.key_file}")

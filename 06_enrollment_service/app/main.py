@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from shared.security import allowed_origins, UploadGuardMiddleware
 from shared.api_errors import install_error_handlers
+from shared.request_middleware import install_request_observability
 from app.routes import enrollment
 from app.models import HealthCheckResponse
 from dotenv import load_dotenv
@@ -80,6 +81,7 @@ app.add_middleware(
 # Exempt: /health endpoints (should always be available)
 rate_limit_middleware = create_rate_limit_middleware()
 app.middleware("http")(rate_limit_middleware)
+install_request_observability(app, "enrollment")
 
 # Include routers
 app.include_router(enrollment.router)
@@ -124,5 +126,6 @@ async def startup_event():
 
 if __name__ == "__main__":
     import uvicorn
+    from config.ssl_config import get_tls_config
     port = int(os.getenv("SERVICE_PORT", 8005))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="0.0.0.0", port=port, **get_tls_config().uvicorn_kwargs())

@@ -13,6 +13,7 @@ from enum import Enum
 from datetime import datetime, timedelta
 import aiohttp
 from shared.security import internal_service_headers
+from config.ssl_config import client_ssl_context
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -41,7 +42,7 @@ class ServiceConnector:
         self.config_dict = config if isinstance(config, dict) else {}
         
         # Extract values from config dict
-        self.base_url = self.config_dict.get("url", f"http://localhost:8000")
+        self.base_url = self.config_dict.get("url", "https://localhost:8000")
         self.max_retries = self.config_dict.get("max_retries", 3)
         self.timeout = self.config_dict.get("timeout", 10)
         
@@ -77,7 +78,7 @@ class ServiceConnector:
     async def get_session(self) -> aiohttp.ClientSession:
         """Get or create HTTP session"""
         if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession()
+            self.session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=client_ssl_context(self.base_url)))
         return self.session
 
     async def close_session(self) -> None:

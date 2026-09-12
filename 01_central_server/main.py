@@ -5,14 +5,17 @@ from pathlib import Path
 
 # Make the repository-level shared package available for direct ``python main.py`` startup.
 sys.path.insert(0, str(Path(__file__).parent.parent))
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from shared.security import allowed_origins, InternalRouteAuthMiddleware
 from shared.api_errors import error_response, install_error_handlers
+from shared.request_middleware import install_request_observability
 import asyncio
 
-from sqlite_store import DATABASE, read_records, connect
+from sqlite_store import DATABASE, read_records, connect, ensure_users_encrypted
 from starlette.responses import JSONResponse
 from routes import user_router
 from routes.conversations_routes import router as conversations_router
@@ -31,6 +34,7 @@ from shared.rate_limiter import create_rate_limit_middleware
 
 def create_app() -> FastAPI:
     migrate_outbox(DATABASE)
+    ensure_users_encrypted(DATABASE)
     app = FastAPI(title="NEXI Central Server", version="1.0.0")
 
     app.add_middleware(
@@ -108,6 +112,7 @@ def create_app() -> FastAPI:
         await app.state.cloud_sync_service.stop()
 
 
+    install_request_observability(app, "central")
     return app
 
 
@@ -126,5 +131,6 @@ def health() -> dict:
 
 if __name__ == "__main__":
     import uvicorn
+    from config.ssl_config import get_tls_config
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000, **get_tls_config().uvicorn_kwargs())

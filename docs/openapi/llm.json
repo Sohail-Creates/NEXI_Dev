@@ -623,8 +623,8 @@
   },
   "servers": [
     {
-      "description": "Local service",
-      "url": "http://localhost:8006"
+      "description": "Local service (TLS)",
+      "url": "https://localhost:8006"
     }
   ]
 }

@@ -18,6 +18,7 @@ from enum import Enum
 from collections import deque
 from shared.semantic_embeddings import SEMANTIC_EMBEDDING_DIMENSION
 from shared.security import internal_service_headers
+from config.ssl_config import client_ssl_context
 
 logger = logging.getLogger(__name__)
 
@@ -100,7 +101,7 @@ class TeachMeConnector:
     - Graceful degradation (continue when TeachMe unavailable)
     """
     
-    def __init__(self, base_url: str = "http://localhost:8004", config: Optional[Dict] = None):
+    def __init__(self, base_url: str = "https://localhost:8004", config: Optional[Dict] = None):
         self.base_url = base_url
         self.config = config or {}
         self.embedding_dimension = SEMANTIC_EMBEDDING_DIMENSION
@@ -140,7 +141,7 @@ class TeachMeConnector:
     async def get_session(self) -> aiohttp.ClientSession:
         """Get or create HTTP session"""
         if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession()
+            self.session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=client_ssl_context(self.base_url)))
         return self.session
     
     async def close_session(self) -> None:

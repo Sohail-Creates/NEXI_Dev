@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 if __name__ == "__main__":
     # Import here to ensure proper module loading
     import uvicorn
+    from config.ssl_config import get_tls_config
     from teachme_service.config import server_config
     
     print("=" * 80)
@@ -32,5 +33,6 @@ if __name__ == "__main__":
         host=server_config.HOST,
         port=server_config.PORT,
         reload=server_config.RELOAD,
-        log_level=server_config.LOG_LEVEL.lower()
+        log_level=server_config.LOG_LEVEL.lower(),
+        **get_tls_config().uvicorn_kwargs(),
     )

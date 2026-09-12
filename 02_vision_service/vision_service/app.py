@@ -12,6 +12,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from shared.security import allowed_origins, InternalRouteAuthMiddleware
 from shared.api_errors import install_error_handlers
+from shared.request_middleware import install_request_observability
 from contextlib import asynccontextmanager
 
 # Setup logging
@@ -168,6 +169,7 @@ def create_app() -> FastAPI:
     
     logger.info("FastAPI application created with all routes registered")
     
+    install_request_observability(app, "vision")
     return app
 
 
@@ -177,6 +179,7 @@ app = create_app()
 
 if __name__ == "__main__":
     import uvicorn
+    from config.ssl_config import get_tls_config
     
     logger.info(f"Starting Vision Service on {Config.HOST}:{Config.PORT}")
     
@@ -184,5 +187,6 @@ if __name__ == "__main__":
         app,
         host=Config.HOST,
         port=Config.PORT,
-        log_level=Config.LOG_LEVEL.lower()
+        log_level=Config.LOG_LEVEL.lower(),
+        **get_tls_config().uvicorn_kwargs(),
     )

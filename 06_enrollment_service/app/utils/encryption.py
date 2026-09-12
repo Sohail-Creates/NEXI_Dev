@@ -5,9 +5,8 @@ import os
 from pathlib import Path
 from typing import Optional, List
 
-from cryptography.fernet import Fernet, InvalidToken
-from pathlib import Path
-from typing import Optional
+from shared.credential_rotation import SecretPair
+from shared.secure_storage import RotatingFernet, biometric_keys
 
 
 class EncryptionManager:
@@ -16,44 +15,23 @@ class EncryptionManager:
     def __init__(self, key_file: str = "./encryption.key", fallback_key_files: Optional[List[str]] = None) -> None:
         self.key_file: str = key_file
         self.fallback_key_files: List[str] = fallback_key_files or []
-        self._cipher = None
-        self._fallback_ciphers: List[Fernet] = []
+        self._rotating: RotatingFernet | None = None
         self._initialize_encryption()
     
     def _initialize_encryption(self) -> None:
         """Initialize encryption key"""
-        if os.path.exists(self.key_file):
-            # Load existing key
-            with open(self.key_file, 'rb') as f:
-                key: bytes = f.read()
+        if os.getenv("NEXI_FERNET_KEY") or os.getenv("NEXI_FERNET_KEY_FILE") or os.getenv("ENCRYPTION_KEY_FILE"):
+            pair = biometric_keys()
         else:
-            # Generate new key
-            key: bytes = Fernet.generate_key()
-            
-            # Save key securely
-            os.makedirs(os.path.dirname(self.key_file) or '.', exist_ok=True)
-            with open(self.key_file, 'wb') as f:
-                f.write(key)
-            
-            # Set restrictive permissions (Windows compatible)
-            try:
-                os.chmod(self.key_file, 0o600)
-            except:
-                pass  # Windows may not support chmod
-        
-        self._cipher = Fernet(key)
-
-        for key_file in self.fallback_key_files:
-            if not key_file or key_file == self.key_file:
-                continue
-            if not os.path.exists(key_file):
-                continue
-            try:
-                with open(key_file, 'rb') as f:
-                    fallback_key: bytes = f.read()
-                self._fallback_ciphers.append(Fernet(fallback_key))
-            except Exception:
-                continue
+            current = Path(self.key_file).read_text(encoding="ascii").strip()
+            previous_values = {
+                Path(path).read_text(encoding="ascii").strip()
+                for path in self.fallback_key_files if Path(path).is_file()
+            } - {current}
+            if len(previous_values) > 1:
+                raise RuntimeError("More than one previous Fernet key requires staged re-encryption; configure one previous key")
+            pair = SecretPair(current, next(iter(previous_values), None))
+        self._rotating = RotatingFernet(pair)
     
     def encrypt(self, data: str) -> bytes:
         """
@@ -68,7 +46,7 @@ class EncryptionManager:
         if not data:
             return b''
         
-        return self._cipher.encrypt(data.encode())
+        return self._rotating.encrypt(data.encode())
     
     def decrypt(self, encrypted_data: bytes) -> str:
         """
@@ -83,15 +61,28 @@ class EncryptionManager:
         if not encrypted_data:
             return ''
         
+        return self._rotating.decrypt(encrypted_data).decode()
+
+    def is_current(self, encrypted_data: bytes) -> bool:
+        return self._rotating.is_current(encrypted_data)
+
+    def rotate_file(self, file_path: str) -> bool:
+        path = Path(file_path)
+        ciphertext = path.read_bytes()
+        if self.is_current(ciphertext):
+            return False
+        rotated = self._rotating.rotate(ciphertext)
+        import tempfile
+        descriptor, temporary = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
         try:
-            return self._cipher.decrypt(encrypted_data).decode()
-        except InvalidToken:
-            for cipher in self._fallback_ciphers:
-                try:
-                    return cipher.decrypt(encrypted_data).decode()
-                except InvalidToken:
-                    continue
-            raise
+            with os.fdopen(descriptor, "wb") as handle:
+                handle.write(rotated)
+                handle.flush()
+                os.fsync(handle.fileno())
+            Path(temporary).replace(path)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+        return True
     
     def encrypt_file(self, file_path: str) -> str:
         """
@@ -106,7 +97,7 @@ class EncryptionManager:
         with open(file_path, 'rb') as f:
             data: bytes = f.read()
         
-        encrypted_data: bytes = self._cipher.encrypt(data)
+        encrypted_data: bytes = self._rotating.encrypt(data)
         
         with open(file_path, 'wb') as f:
             f.write(encrypted_data)
@@ -127,7 +118,7 @@ class EncryptionManager:
         with open(encrypted_file_path, 'rb') as f:
             encrypted_data: bytes = f.read()
         
-        decrypted_data: bytes = self._cipher.decrypt(encrypted_data)
+        decrypted_data: bytes = self._rotating.decrypt(encrypted_data)
         
         if not output_path:
             output_path = encrypted_file_path

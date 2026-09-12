@@ -13,6 +13,7 @@ root_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(root_dir))
 
 import uvicorn
+from config.ssl_config import get_tls_config
 
 from tts_service.config import Config
 
@@ -27,5 +28,6 @@ if __name__ == "__main__":
         host=Config.HOST,
         port=Config.PORT,
         reload=False,
-        log_level=Config.LOG_LEVEL.lower()
+        log_level=Config.LOG_LEVEL.lower(),
+        **get_tls_config().uvicorn_kwargs(),
     )

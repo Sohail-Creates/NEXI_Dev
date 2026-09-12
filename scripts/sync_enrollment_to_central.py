@@ -1,14 +1,19 @@
 import os
 import sys
 import json
+from pathlib import Path
 from typing import Dict, Any, List
 
 import httpx
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from config.ssl_config import client_verify
+from shared.security import internal_service_headers
+
 
 def _get_base_urls() -> tuple[str, str]:
-    enrollment_url = os.getenv("ENROLLMENT_SERVICE_URL", "http://localhost:8005")
-    central_url = os.getenv("CENTRAL_SERVER_URL", "http://localhost:8000")
+    enrollment_url = os.getenv("ENROLLMENT_SERVICE_URL", "https://localhost:8005")
+    central_url = os.getenv("CENTRAL_SERVER_URL", "https://localhost:8000")
     return enrollment_url.rstrip("/"), central_url.rstrip("/")
 
 
@@ -51,7 +56,7 @@ def _sync_user(client: httpx.Client, enrollment_url: str, central_url: str, user
 def main() -> int:
     enrollment_url, central_url = _get_base_urls()
 
-    with httpx.Client(timeout=30.0) as client:
+    with httpx.Client(timeout=30.0, verify=client_verify(), headers=internal_service_headers()) as client:
         list_resp = client.get(f"{enrollment_url}/enrollment/storage/list")
         list_resp.raise_for_status()
         user_ids: List[str] = list_resp.json().get("user_ids", [])

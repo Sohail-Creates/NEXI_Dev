@@ -31,7 +31,7 @@ def _load_schema(service: str) -> dict:
     sys.path[:0] = [str(ROOT), str(service_dir)]
     module = importlib.import_module(module_name)
     schema = module.app.openapi()
-    schema["servers"] = [{"url": f"http://localhost:{port}", "description": "Local service"}]
+    schema["servers"] = [{"url": f"https://localhost:{port}", "description": "Local service (TLS)"}]
     return schema
 
 

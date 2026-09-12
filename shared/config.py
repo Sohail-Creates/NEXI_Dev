@@ -54,13 +54,13 @@ class ServiceConfig:
     
     # Localhost defaults (used if env var not set)
     DEFAULT_URLS = {
-        "central": "http://localhost:8000",
-        "vision": "http://localhost:8001",
-        "audio": "http://localhost:8002",
-        "tts": "http://localhost:8003",
-        "teachme": "http://localhost:8004",
-        "enrollment": "http://localhost:8005",
-        "llm": "http://localhost:8006"
+        "central": "https://localhost:8000",
+        "vision": "https://localhost:8001",
+        "audio": "https://localhost:8002",
+        "tts": "https://localhost:8003",
+        "teachme": "https://localhost:8004",
+        "enrollment": "https://localhost:8005",
+        "llm": "https://localhost:8006"
     }
     
     # Cache for resolved URLs (avoid repeated env var lookups)
@@ -108,7 +108,7 @@ class ServiceConfig:
             url = default_url
         
         if not url.startswith("http://") and not url.startswith("https://"):
-            url = f"http://{url}"
+            url = f"https://{url}"
         
         # Cache the result
         cls._url_cache[service_name] = url
@@ -189,7 +189,8 @@ class ServiceConfig:
         async def check_service(service_name: str) -> bool:
             try:
                 url = cls.get_service_url(service_name)
-                async with httpx.AsyncClient(timeout=2.0) as client:
+                from config.ssl_config import client_verify
+                async with httpx.AsyncClient(timeout=2.0, verify=client_verify(url)) as client:
                     response = await client.get(f"{url}/health")
                     return response.status_code == 200
             except Exception as e:

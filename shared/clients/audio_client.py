@@ -7,6 +7,7 @@ Every method wraps the HTTP call in the circuit breaker.
 """
 
 import httpx
+from config.ssl_config import client_verify
 from shared.security import internal_service_headers
 import logging
 from typing import Optional
@@ -98,7 +99,7 @@ class AudioServiceClient:
             logger.info(f"[AudioClient] Starting embedding extraction for {len(audio_samples)} samples from speaker {speaker_id}")
             logger.info(f"[AudioClient] Base URL: {self.base_url}")
             
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, verify=client_verify(self.base_url)) as client:
                 for idx, audio_data in enumerate(audio_samples):
                     try:
                         filename = f"enrollment_{speaker_id}_{idx}.wav"
@@ -256,7 +257,7 @@ class AudioServiceClient:
                 )
 
             logger.info(f"[process_voice] Calling Audio Service: POST /api/v1/process-voice with file {filename} ({len(audio_file_bytes)} bytes)")
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, verify=client_verify(self.base_url)) as client:
                 files = {"file": (filename, audio_file_bytes, "audio/wav")}
                 response = await client.post(
                     f"{self.base_url}/api/v1/process-voice",
@@ -361,7 +362,7 @@ class AudioServiceClient:
                 )
 
             logger.info(f"[AudioClient] Calling Audio Service: POST /verify-speaker for user_id={user_id}, file={filename}")
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, verify=client_verify(self.base_url)) as client:
                 files = {"file": (filename, audio_file_bytes, "audio/wav")}
                 data = {"user_id": user_id}
                 response = await client.post(
@@ -456,7 +457,7 @@ class AudioServiceClient:
                 )
 
             logger.info(f"[AudioClient] Calling Audio Service: POST /transcribe with file={filename}, language={language}")
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, verify=client_verify(self.base_url)) as client:
                 files = {"file": (filename, audio_file_bytes, "audio/wav")}
                 data = {"language": language}
                 response = await client.post(
@@ -522,7 +523,7 @@ class AudioServiceClient:
                 )
 
             logger.info("[AudioClient] Calling Audio Service: POST /wake-word/start")
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, verify=client_verify(self.base_url)) as client:
                 response = await client.post(f"{self.base_url}/wake-word/start", headers=internal_service_headers())
                 logger.info(f"[AudioClient] Audio Service response: status={response.status_code}")
                 if response.status_code == 200:
@@ -578,7 +579,7 @@ class AudioServiceClient:
                 )
 
             logger.info("[AudioClient] Calling Audio Service: POST /wake-word/stop")
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, verify=client_verify(self.base_url)) as client:
                 response = await client.post(f"{self.base_url}/wake-word/stop", headers=internal_service_headers())
                 logger.info(f"[AudioClient] Audio Service response: status={response.status_code}")
                 if response.status_code == 200:
@@ -634,7 +635,7 @@ class AudioServiceClient:
                 )
 
             logger.info("[AudioClient] Calling Audio Service: GET /wake-word/status")
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, verify=client_verify(self.base_url)) as client:
                 response = await client.get(f"{self.base_url}/wake-word/status", headers=internal_service_headers())
                 logger.info(f"[AudioClient] Audio Service response: status={response.status_code}")
                 if response.status_code == 200:
@@ -686,7 +687,7 @@ class AudioServiceClient:
         """
         try:
             logger.info("[AudioClient] Calling Audio Service: GET /health")
-            async with httpx.AsyncClient(timeout=httpx.Timeout(3.0)) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(3.0), verify=client_verify(self.base_url)) as client:
                 response = await client.get(f"{self.base_url}/health")
                 logger.info(f"[AudioClient] Audio Service health check: status={response.status_code}")
                 if response.status_code == 200:

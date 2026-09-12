@@ -5,8 +5,10 @@ from contextlib import closing
 import hashlib
 import json
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import sqlite3
-from sqlite_store import DATABASE, initialize
+from sqlite_store import DATABASE, initialize, _decode_record, _encode_record
 
 
 def migrate(source_dir, database, allow_missing_users=False):
@@ -75,9 +77,9 @@ def migrate(source_dir, database, allow_missing_users=False):
                 if conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]:
                     raise ValueError(f"{table}: destination is not empty; refusing overwrite")
                 conn.executemany(f"INSERT INTO {table} VALUES (?, ?)",
-                                 ((i, json.dumps(row, ensure_ascii=False, allow_nan=False)) for i, row in enumerate(data)))
+                                 ((i, _encode_record(table, row)) for i, row in enumerate(data)))
                 conn.execute("INSERT INTO migration VALUES (?, ?)", (table, digest))
-            stored = [json.loads(row[0]) for row in conn.execute(f"SELECT record FROM {table} ORDER BY position")]
+            stored = [_decode_record(table, row[0]) for row in conn.execute(f"SELECT record FROM {table} ORDER BY position")]
             print(f"{table}: JSON={len(data)} SQLite={len(stored)} action={'unchanged' if previous else 'imported'} parity={stored == data}")
 
 
@@ -85,7 +87,7 @@ def export(database, destination):
     destination.mkdir(parents=True, exist_ok=True)
     with closing(sqlite3.connect(f"file:{database.as_posix()}?mode=ro", uri=True)) as conn:
         for table in ("users", "conversations"):
-            rows = [json.loads(row[0]) for row in conn.execute(f"SELECT record FROM {table} ORDER BY position")]
+            rows = [_decode_record(table, row[0]) for row in conn.execute(f"SELECT record FROM {table} ORDER BY position")]
             data = rows if table == "users" else {table: rows}
             with (destination / (table + ".json")).open("x", encoding="utf-8") as output:
                 json.dump(data, output, ensure_ascii=False, allow_nan=False)

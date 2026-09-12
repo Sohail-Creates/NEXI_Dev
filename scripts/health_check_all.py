@@ -6,16 +6,20 @@ Run this script to check the health of all NEXI services
 import asyncio
 import httpx
 import sys
+import os
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from config.ssl_config import client_verify
 from datetime import datetime
 
 SERVICES = {
-    "Central Server": "http://localhost:8000/health",
-    "Vision Service": "http://localhost:8001/health",
-    "Audio Service": "http://localhost:8002/health",
-    "TTS Service": "http://localhost:8003/health",
-    "TeachMe Service": "http://localhost:8004/health",
-    "Enrollment Service": "http://localhost:8005/health",
-    "LLM Service": "http://localhost:8006/api/v1/health",
+    "Central Server": "https://localhost:8000/health",
+    "Vision Service": "https://localhost:8001/health",
+    "Audio Service": "https://localhost:8002/health",
+    "TTS Service": "https://localhost:8003/health",
+    "TeachMe Service": "https://localhost:8004/health",
+    "Enrollment Service": "https://localhost:8005/health",
+    "LLM Service": "https://localhost:8006/api/v1/health",
 }
 
 async def check_service_health(name: str, url: str, client: httpx.AsyncClient) -> bool:
@@ -47,7 +51,7 @@ async def main():
     print("="*60 + "\n")
     
     results = {}
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(verify=client_verify()) as client:
         for name, url in SERVICES.items():
             results[name] = await check_service_health(name, url, client)
     

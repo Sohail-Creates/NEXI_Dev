@@ -5,6 +5,7 @@ from fastapi import HTTPException
 import logging
 import asyncio
 from shared.security import internal_service_headers
+from config.ssl_config import client_verify
 
 logger = logging.getLogger(__name__)
 
@@ -12,14 +13,14 @@ class VisionClient:
     """Client for communicating with Vision Service with timeout & retry"""
     
     def __init__(self):
-        self.base_url = os.getenv("VISION_SERVICE_URL", "http://localhost:8001")
+        self.base_url = os.getenv("VISION_SERVICE_URL", "https://localhost:8001")
         self.timeout = int(os.getenv("SERVICE_TIMEOUT", 30))
         self.max_retries = int(os.getenv("SERVICE_MAX_RETRIES", 2))
     
     async def check_health(self) -> bool:
         """Check if Vision Service is healthy"""
         try:
-            async with httpx.AsyncClient(timeout=5.0, headers=internal_service_headers()) as client:
+            async with httpx.AsyncClient(timeout=5.0, headers=internal_service_headers(), verify=client_verify(self.base_url)) as client:
                 response = await client.get(f"{self.base_url}/health")
                 return response.status_code == 200
         except Exception as e:
@@ -48,7 +49,7 @@ class VisionClient:
         last_error = None
         for attempt in range(self.max_retries):
             try:
-                async with httpx.AsyncClient(timeout=self.timeout, headers=internal_service_headers()) as client:
+                async with httpx.AsyncClient(timeout=self.timeout, headers=internal_service_headers(), verify=client_verify(self.base_url)) as client:
                     with open(image_path, 'rb') as f:
                         files = {'file': (os.path.basename(image_path), f, 'image/jpeg')}
                         

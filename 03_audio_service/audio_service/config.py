@@ -66,7 +66,7 @@ QUEUE_CONFIG = {
 BACKEND_CONFIG = {
     "enable_polling": os.getenv("AUDIO_BACKEND_ENABLE_POLLING", "true").lower() == "true",
     "poll_interval": int(os.getenv("AUDIO_BACKEND_POLL_INTERVAL", 5)),
-    "base_url": os.getenv("AUDIO_BACKEND_BASE_URL", os.getenv("CENTRAL_SERVER_URL", "http://localhost:8000")),
+    "base_url": os.getenv("AUDIO_BACKEND_BASE_URL", os.getenv("CENTRAL_SERVER_URL", "https://localhost:8000")),
     "api_key": os.getenv("AUDIO_BACKEND_API_KEY", ""),
     "timeout": int(os.getenv("AUDIO_BACKEND_TIMEOUT", 30)),
     "max_retries": int(os.getenv("AUDIO_BACKEND_MAX_RETRIES", 3)),
@@ -104,9 +104,9 @@ if _HAVE_CONFIG_PORTS:
     TTS_SERVICE_URL = os.getenv("TTS_SERVICE_URL", ServicePorts.get_base_url("tts"))
 else:
     # Fallback to defaults if config module not available (local dev)
-    CENTRAL_SERVER_URL = os.getenv("CENTRAL_SERVER_URL", "http://localhost:8000")
-    VISION_SERVICE_URL = os.getenv("VISION_SERVICE_URL", "http://localhost:8001")
-    TTS_SERVICE_URL = os.getenv("TTS_SERVICE_URL", "http://localhost:8003")
+    CENTRAL_SERVER_URL = os.getenv("CENTRAL_SERVER_URL", "https://localhost:8000")
+    VISION_SERVICE_URL = os.getenv("VISION_SERVICE_URL", "https://localhost:8001")
+    TTS_SERVICE_URL = os.getenv("TTS_SERVICE_URL", "https://localhost:8003")
 
 # ============================================================================
 # FEATURE FLAGS

@@ -10,6 +10,7 @@ import asyncio
 
 import httpx
 from shared.security import merge_internal_headers
+from config.ssl_config import client_verify
 from tenacity import (
     retry,
     stop_after_attempt,
@@ -80,7 +81,7 @@ class AsyncHTTPClient:
 
     def __init__(
         self,
-        base_url: str = "http://localhost:8000",
+        base_url: str = "https://localhost:8000",
         timeout: int = 30,
         max_retries: int = 3,
         circuit_breaker_enabled: bool = True,
@@ -94,7 +95,7 @@ class AsyncHTTPClient:
     async def __aenter__(self):
         """Context manager entry."""
         if self.client is None:
-            self.client = httpx.AsyncClient(timeout=self.timeout)
+            self.client = httpx.AsyncClient(timeout=self.timeout, verify=client_verify(self.base_url))
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -110,7 +111,7 @@ class AsyncHTTPClient:
     def _ensure_client(self) -> httpx.AsyncClient:
         """Ensure client is initialized."""
         if self.client is None:
-            self.client = httpx.AsyncClient(timeout=self.timeout)
+            self.client = httpx.AsyncClient(timeout=self.timeout, verify=client_verify(self.base_url))
         return self.client
 
     async def _check_circuit_breaker(self) -> None:

@@ -28,6 +28,7 @@ from typing import Optional, List, Dict, Any
 import base64
 import wave
 import io
+from config.ssl_config import client_verify
 
 # Core dependencies
 try:
@@ -63,24 +64,24 @@ def get_service_urls() -> Dict[str, str]:
     if in_docker:
         # Docker internal networking
         return {
-            "central": "http://central:8000",
-            "vision": "http://vision:8001",
-            "audio": "http://audio:8002",
-            "tts": "http://tts:8003",
-            "teachme": "http://teachme:8004",
-            "enrollment": "http://enrollment:8005",
-            "llm": "http://llm:8006",
+            "central": "https://central:8000",
+            "vision": "https://vision:8001",
+            "audio": "https://audio:8002",
+            "tts": "https://tts:8003",
+            "teachme": "https://teachme:8004",
+            "enrollment": "https://enrollment:8005",
+            "llm": "https://llm:8006",
         }
     else:
         # Local development - use localhost with configurable ports
         return {
-            "central": os.getenv("CENTRAL_SERVER_URL", "http://localhost:8000"),
-            "vision": os.getenv("VISION_SERVICE_URL", "http://localhost:8001"),
-            "audio": os.getenv("AUDIO_SERVICE_URL", "http://localhost:8002"),
-            "tts": os.getenv("TTS_SERVICE_URL", "http://localhost:8003"),
-            "teachme": os.getenv("TEACHME_SERVICE_URL", "http://localhost:8004"),
-            "enrollment": os.getenv("ENROLLMENT_SERVICE_URL", "http://localhost:8005"),
-            "llm": os.getenv("LLM_SERVICE_URL", "http://localhost:8006"),
+            "central": os.getenv("CENTRAL_SERVER_URL", "https://localhost:8000"),
+            "vision": os.getenv("VISION_SERVICE_URL", "https://localhost:8001"),
+            "audio": os.getenv("AUDIO_SERVICE_URL", "https://localhost:8002"),
+            "tts": os.getenv("TTS_SERVICE_URL", "https://localhost:8003"),
+            "teachme": os.getenv("TEACHME_SERVICE_URL", "https://localhost:8004"),
+            "enrollment": os.getenv("ENROLLMENT_SERVICE_URL", "https://localhost:8005"),
+            "llm": os.getenv("LLM_SERVICE_URL", "https://localhost:8006"),
         }
 
 DEFAULT_SERVICE_URLS = get_service_urls()
@@ -167,6 +168,7 @@ class ServiceClient:
         self.base_urls = DEFAULT_SERVICE_URLS.copy()
         self._load_env()
         self.session = requests.Session()
+        self.session.verify = client_verify()
         self.session.headers.update({"User-Agent": "NEXI-CLI/1.0"})
     
     def _load_env(self):
@@ -188,7 +190,7 @@ class ServiceClient:
                 logger.warning(f"Could not load .env: {e}")
     
     def get_url(self, service: str) -> str:
-        return self.base_urls.get(service, DEFAULT_SERVICE_URLS.get(service, f"http://localhost:8000"))
+        return self.base_urls.get(service, DEFAULT_SERVICE_URLS.get(service, "https://localhost:8000"))
     
     def _request(self, method: str, service: str, path: str, **kwargs) -> Optional[Dict]:
         """Low-level HTTP request with error handling."""
@@ -530,8 +532,8 @@ class SystemMenu(MenuSection):
             print(f"\n  TeachMe objects (test_user): {count}")
         elif choice == "1.5":
             print("\n  Vision stream available at:")
-            print("    http://localhost:8001/stream")
-            print("    http://localhost:8001/live  (HTML viewer)")
+            print("    https://localhost:8001/stream")
+            print("    https://localhost:8001/live  (HTML viewer)")
         elif choice == "1.6":
             result = self.client.get("audio", "/api/v1/conversation/state")
             if result:
@@ -717,7 +719,7 @@ class VisionMenu(MenuSection):
     def handle_choice(self, choice: str):
         if choice == "3.1":
             import webbrowser
-            url = "http://localhost:8001/live"
+            url = "https://localhost:8001/live"
             print(f"\n  Opening {url} in browser...")
             webbrowser.open(url)
             self.wait()

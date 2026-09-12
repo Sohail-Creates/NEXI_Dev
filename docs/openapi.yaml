@@ -3583,5 +3583,5 @@ components:
         error:
           $ref: '#/components/schemas/ErrorBody'
 servers:
-- url: http://localhost:8000
-  description: Local service
+- url: https://localhost:8000
+  description: Local service (TLS)

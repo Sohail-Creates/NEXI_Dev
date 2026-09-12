@@ -9,6 +9,7 @@ from typing import Callable
 
 import requests
 from shared.security import internal_service_headers
+from config.ssl_config import client_verify
 
 try:
     from shared.focus_mode import FocusModeClient
@@ -38,7 +39,7 @@ class MicrophoneLeaseClient:
 
     def __init__(self, central_url=None, timeout=2.0):
         self.central_url = (central_url or os.getenv(
-            "CENTRAL_SERVER_URL", "http://localhost:8000"
+            "CENTRAL_SERVER_URL", "https://localhost:8000"
         )).rstrip("/")
         self.timeout = timeout
 
@@ -53,6 +54,7 @@ class MicrophoneLeaseClient:
             },
             headers=internal_service_headers(),
             timeout=self.timeout,
+            verify=client_verify(self.central_url),
         )
         response.raise_for_status()
         payload = response.json()
@@ -65,6 +67,7 @@ class MicrophoneLeaseClient:
             self.central_url + "/resources/acknowledge/" + lease_id,
             headers=internal_service_headers(),
             timeout=self.timeout,
+            verify=client_verify(self.central_url),
         )
         acknowledgement.raise_for_status()
         if acknowledgement.json().get("granted") is not True:
@@ -77,6 +80,7 @@ class MicrophoneLeaseClient:
             self.central_url + "/resources/release/" + lease_id,
             headers=internal_service_headers(),
             timeout=self.timeout,
+            verify=client_verify(self.central_url),
         )
         return response.status_code in (200, 404)
 
@@ -85,6 +89,7 @@ class MicrophoneLeaseClient:
             self.central_url + "/resources/status/" + lease_id,
             headers=internal_service_headers(),
             timeout=self.timeout,
+            verify=client_verify(self.central_url),
         )
         if response.status_code == 404:
             return None

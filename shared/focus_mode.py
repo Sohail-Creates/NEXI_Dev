@@ -6,7 +6,7 @@ import os
 import threading
 import time
 from urllib.error import HTTPError, URLError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 
 TEACHME_FOCUS = "focus: teachme"
@@ -89,7 +89,7 @@ class FocusModeClient:
 
     def __init__(self, central_url=None, defer_seconds=None, status_provider=None):
         self.central_url = (central_url or os.getenv(
-            "CENTRAL_SERVER_URL", "http://localhost:8000"
+            "CENTRAL_SERVER_URL", "https://localhost:8000"
         )).rstrip("/")
         self.defer_seconds = float(
             defer_seconds if defer_seconds is not None
@@ -101,7 +101,10 @@ class FocusModeClient:
         if self.status_provider is not None:
             return self.status_provider()
         try:
-            with urlopen(self.central_url + "/resources/focus", timeout=0.5) as response:
+            from config.ssl_config import client_ssl_context
+            from shared.security import internal_service_headers
+            request = Request(self.central_url + "/resources/focus", headers=internal_service_headers())
+            with urlopen(request, timeout=0.5, context=client_ssl_context(self.central_url)) as response:
                 return json.loads(response.read().decode("utf-8"))
         except (HTTPError, URLError, OSError, ValueError, json.JSONDecodeError):
             return {"signal": None, "teachme_active": False, "unavailable": True}

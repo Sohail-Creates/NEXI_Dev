@@ -24,6 +24,7 @@ try:
     from vision_service.config import Config
     from vision_service.app import app
     import uvicorn
+    from config.ssl_config import get_tls_config
     
     logger.info("=" * 60)
     logger.info("VISION SERVICE - STARTUP")
@@ -40,7 +41,8 @@ try:
         host=Config.HOST,
         port=Config.PORT,
         reload=False,  # Disable reload in production
-        log_level=Config.LOG_LEVEL.lower()
+        log_level=Config.LOG_LEVEL.lower(),
+        **get_tls_config().uvicorn_kwargs(),
     )
     
 except ImportError as e:

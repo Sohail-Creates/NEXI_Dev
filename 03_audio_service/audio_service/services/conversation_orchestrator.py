@@ -19,6 +19,7 @@ from datetime import datetime
 from enum import Enum
 import aiohttp
 from shared.security import merge_internal_headers
+from config.ssl_config import client_ssl_context
 
 try:
     from shared.focus_mode import FocusModeClient
@@ -87,11 +88,11 @@ class ConversationOrchestrator:
     def __init__(
         self,
         conversation_state_manager: ConversationStateManager,
-        audio_service_url: str = "http://localhost:8002",
-        vision_service_url: str = "http://localhost:8001",
-        teachme_service_url: str = "http://localhost:8005",
-        central_service_url: str = "http://localhost:8000",
-        tts_service_url: str = "http://localhost:8003",
+        audio_service_url: str = "https://localhost:8002",
+        vision_service_url: str = "https://localhost:8001",
+        teachme_service_url: str = "https://localhost:8004",
+        central_service_url: str = "https://localhost:8000",
+        tts_service_url: str = "https://localhost:8003",
         timeout: int = 30,
         max_retries: int = 3,
         focus_mode_client=None,
@@ -134,7 +135,10 @@ class ConversationOrchestrator:
     async def start(self):
         """Start orchestrator (create session pool)."""
         if self.session is None:
-            self.session = aiohttp.ClientSession(timeout=self.timeout)
+            self.session = aiohttp.ClientSession(
+                timeout=self.timeout,
+                connector=aiohttp.TCPConnector(ssl=client_ssl_context(self.central_url)),
+            )
             logger.info("Orchestrator session pool started")
     
     async def stop(self):

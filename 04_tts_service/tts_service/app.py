@@ -18,6 +18,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from shared.security import allowed_origins, InternalRouteAuthMiddleware
 from shared.api_errors import install_error_handlers
+from shared.request_middleware import install_request_observability
 from pydantic import BaseModel, ConfigDict, Field
 
 from piper import PiperVoice, SynthesisConfig
@@ -352,7 +353,8 @@ app.middleware("http")(rate_limit_middleware)
 # ==========================
 # Middleware for Request Tracking
 # ==========================
-@app.middleware("http")
+# Retired local ID generator; shared observability now owns request tracking.
+# Kept as an unmounted artifact until Phase 10, not a second active middleware.
 async def add_request_id(request: Request, call_next):
     """Add unique request ID for distributed tracing."""
     request_id = str(uuid.uuid4())[:8]
@@ -360,6 +362,9 @@ async def add_request_id(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Request-ID"] = request_id
     return response
+
+
+install_request_observability(app, "tts")
 
 
 # ==========================

@@ -6,6 +6,7 @@ from typing import Dict, List, Any, Optional, Tuple
 import requests
 import time
 from llm_service.config import OPENROUTER_MODEL, OPENROUTER_BASE_URL, OPENROUTER_API_KEY_ENV
+from shared.credential_rotation import SecretPair
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,15 @@ class OpenRouterClient:
             api_key: OpenRouter API key (defaults to env var)
             timeout: Request timeout in seconds
         """
-        self.api_key = api_key or os.getenv(OPENROUTER_API_KEY_ENV)
+        if api_key:
+            self.api_keys = SecretPair(api_key)
+        else:
+            self.api_keys = SecretPair.from_env(
+                OPENROUTER_API_KEY_ENV,
+                f"{OPENROUTER_API_KEY_ENV}_PREVIOUS",
+                required=False,
+            )
+        self.api_key = self.api_keys.current
         self.timeout = timeout
         self.logger = logging.getLogger(__name__)
         self.base_url = OPENROUTER_BASE_URL.rstrip("/")
@@ -79,15 +88,21 @@ class OpenRouterClient:
                 "top_p": 0.9,
             }
             
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            }
-            
             self.logger.debug(f"Calling OpenRouter API: {url}")
-            
-            # Make request
-            response = requests.post(url, json=payload, headers=headers, timeout=timeout)
+
+            # The current key is always attempted first. During a rotation window,
+            # an auth rejection alone triggers one retry with the previous key.
+            response = None
+            for active_key in self.api_keys.active:
+                response = requests.post(
+                    url,
+                    json=payload,
+                    headers={"Authorization": f"Bearer {active_key}", "Content-Type": "application/json"},
+                    timeout=timeout,
+                )
+                if response.status_code not in {401, 403}:
+                    break
+            assert response is not None
             elapsed = time.time() - start_time
             
             # Check for success
@@ -161,12 +176,17 @@ class OpenRouterClient:
         
         try:
             # Quick health check
-            response = requests.get(
-                f"{self.base_url}/models",
-                timeout=5,
-                headers={"Authorization": f"Bearer {self.api_key}"}
-            )
-            return 200 <= response.status_code < 300
+            for active_key in self.api_keys.active:
+                response = requests.get(
+                    f"{self.base_url}/models",
+                    timeout=5,
+                    headers={"Authorization": f"Bearer {active_key}"},
+                )
+                if 200 <= response.status_code < 300:
+                    return True
+                if response.status_code not in {401, 403}:
+                    return False
+            return False
         except Exception as e:
             self.logger.debug(f"OpenRouter health check failed: {str(e)}")
             return False

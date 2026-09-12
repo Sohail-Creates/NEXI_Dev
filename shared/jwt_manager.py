@@ -17,6 +17,7 @@ import logging
 from dataclasses import dataclass, field
 from enum import Enum
 from fastapi import HTTPException, Request
+from shared.credential_rotation import SecretPair
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,9 @@ class TokenConfig:
     
     # JWT settings
     secret_key: str = field(default_factory=lambda: os.getenv("NEXI_JWT_SECRET", "").strip())
+    previous_secret_key: str = field(
+        default_factory=lambda: os.getenv("NEXI_JWT_SECRET_PREVIOUS", "").strip()
+    )
     algorithm: str = "HS256"
     
     # Token validation
@@ -72,6 +76,24 @@ class JWTManager:
             raise RuntimeError("PyJWT is required; authentication fails closed")
         if not self.config.secret_key:
             raise RuntimeError("NEXI_JWT_SECRET is required for token operations")
+
+    def _verification_keys(self) -> tuple[str, ...]:
+        return SecretPair(self.config.secret_key, self.config.previous_secret_key or None).active
+
+    def _decode(self, token: str, *, verify_exp: bool = True) -> Dict[str, Any]:
+        last_error = None
+        for secret_key in self._verification_keys():
+            try:
+                return jwt.decode(
+                    token,
+                    secret_key,
+                    algorithms=[self.config.algorithm],
+                    options={"verify_exp": verify_exp, "verify_iss": self.config.verify_iss},
+                    issuer=self.config.issuer if self.config.verify_iss else None,
+                )
+            except jwt.InvalidTokenError as exc:
+                last_error = exc
+        raise last_error or jwt.InvalidTokenError("No JWT verification key configured")
     
     def create_access_token(
         self,
@@ -258,16 +280,7 @@ class JWTManager:
         """
         self._require_configuration()
         try:
-            payload = jwt.decode(
-                token,
-                self.config.secret_key,
-                algorithms=[self.config.algorithm],
-                options={
-                    "verify_exp": self.config.verify_exp,
-                    "verify_iss": self.config.verify_iss
-                },
-                issuer=self.config.issuer if self.config.verify_iss else None
-            )
+            payload = self._decode(token, verify_exp=self.config.verify_exp)
             
             # Check if token is revoked
             if payload.get("jti") in self.revoked_tokens:
@@ -321,12 +334,7 @@ class JWTManager:
         """
         try:
             # Don't verify expiration for revocation
-            payload = jwt.decode(
-                token,
-                self.config.secret_key,
-                algorithms=[self.config.algorithm],
-                options={"verify_exp": False}
-            )
+            payload = self._decode(token, verify_exp=False)
             
             jti = payload.get("jti")
             if jti:

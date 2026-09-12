@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import os
-import secrets
 from collections.abc import Iterable
 from typing import Optional
 
 from fastapi import HTTPException, Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from shared.api_errors import error_response
+from shared.credential_rotation import SecretPair
+from shared.utils.trace_context import get_trace_headers
 
 
 INTERNAL_TOKEN_HEADER = "X-NEXI-Service-Token"
@@ -21,18 +22,18 @@ def auth_enforcement_enabled() -> bool:
     return os.getenv("AUTH_ENFORCEMENT_ENABLED", "false").strip().lower() in _TRUE
 
 
-def _internal_token() -> str:
-    return os.getenv("NEXI_INTERNAL_SERVICE_TOKEN", "").strip()
+def _internal_tokens() -> SecretPair:
+    return SecretPair.from_env(
+        "NEXI_INTERNAL_SERVICE_TOKEN", "NEXI_INTERNAL_SERVICE_TOKEN_PREVIOUS"
+    )
 
 
 def internal_service_headers(user_id: Optional[str] = None) -> dict[str, str]:
     """Build trusted internal headers without forwarding an end-user token."""
     if not auth_enforcement_enabled():
-        return {}
-    token = _internal_token()
-    if not token:
-        raise RuntimeError("NEXI_INTERNAL_SERVICE_TOKEN is required when auth enforcement is enabled")
-    headers = {INTERNAL_TOKEN_HEADER: token}
+        return get_trace_headers()
+    token = _internal_tokens().current
+    headers = {INTERNAL_TOKEN_HEADER: token, **get_trace_headers()}
     if user_id:
         headers[TRUSTED_USER_HEADER] = user_id
     return headers
@@ -49,9 +50,8 @@ def merge_internal_headers(
 def is_internal_request(request: Request) -> bool:
     if not auth_enforcement_enabled():
         return True
-    expected = _internal_token()
     supplied = request.headers.get(INTERNAL_TOKEN_HEADER, "")
-    return bool(expected and supplied and secrets.compare_digest(supplied, expected))
+    return _internal_tokens().accepts(supplied)
 
 
 async def require_internal_service(request: Request) -> Optional[str]:

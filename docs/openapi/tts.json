@@ -1752,8 +1752,8 @@
   },
   "servers": [
     {
-      "description": "Local service",
-      "url": "http://localhost:8003"
+      "description": "Local service (TLS)",
+      "url": "https://localhost:8003"
     }
   ]
 }

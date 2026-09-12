@@ -32,15 +32,15 @@ class VisionServiceConfig:
     
     @classmethod
     def get_base_url(cls) -> str:
-        return f"http://{cls.HOST}:{cls.PORT}"
+        return f"https://{cls.HOST}:{cls.PORT}"
     
     @classmethod
     def get_analyze_url(cls) -> str:
-        return f"http://{cls.HOST}:{cls.PORT}{cls.ANALYZE_ENDPOINT}"
+        return f"https://{cls.HOST}:{cls.PORT}{cls.ANALYZE_ENDPOINT}"
     
     @classmethod
     def get_health_url(cls) -> str:
-        return f"http://{cls.HOST}:{cls.PORT}{cls.HEALTH_ENDPOINT}"
+        return f"https://{cls.HOST}:{cls.PORT}{cls.HEALTH_ENDPOINT}"
 
 
 class StorageConfig:

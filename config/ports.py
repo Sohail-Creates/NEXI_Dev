@@ -79,14 +79,15 @@ class ServicePorts:
         - AUDIO_SERVICE_HOST=audio-service (for Docker)
         - AUDIO_SERVICE_HOST=localhost (for local dev)
         """
+        scheme = "https" if os.getenv("NEXI_TLS_ENABLED", "true").lower() in {"1", "true", "yes", "on"} else "http"
         service_map = {
-            "central": f"http://{CENTRAL_SERVER_HOST}:{CENTRAL_SERVER_PORT}",
-            "audio": f"http://{AUDIO_SERVICE_HOST}:{AUDIO_SERVICE_PORT}",
-            "vision": f"http://{VISION_SERVICE_HOST}:{VISION_SERVICE_PORT}",
-            "tts": f"http://{TTS_SERVICE_HOST}:{TTS_SERVICE_PORT}",
-            "teachme": f"http://{TEACHME_SERVICE_HOST}:{TEACHME_SERVICE_PORT}",
-            "enrollment": f"http://{ENROLLMENT_SERVICE_HOST}:{ENROLLMENT_SERVICE_PORT}",
-            "llm": f"http://{LLM_SERVICE_HOST}:{LLM_SERVICE_PORT}",
-            "streamlit": f"http://{STREAMLIT_UI_HOST}:{STREAMLIT_UI_PORT}",
+            "central": f"{scheme}://{CENTRAL_SERVER_HOST}:{CENTRAL_SERVER_PORT}",
+            "audio": f"{scheme}://{AUDIO_SERVICE_HOST}:{AUDIO_SERVICE_PORT}",
+            "vision": f"{scheme}://{VISION_SERVICE_HOST}:{VISION_SERVICE_PORT}",
+            "tts": f"{scheme}://{TTS_SERVICE_HOST}:{TTS_SERVICE_PORT}",
+            "teachme": f"{scheme}://{TEACHME_SERVICE_HOST}:{TEACHME_SERVICE_PORT}",
+            "enrollment": f"{scheme}://{ENROLLMENT_SERVICE_HOST}:{ENROLLMENT_SERVICE_PORT}",
+            "llm": f"{scheme}://{LLM_SERVICE_HOST}:{LLM_SERVICE_PORT}",
+            "streamlit": f"{scheme}://{STREAMLIT_UI_HOST}:{STREAMLIT_UI_PORT}",
         }
-        return service_map.get(service_name, f"http://{CENTRAL_SERVER_HOST}:{CENTRAL_SERVER_PORT}")
+        return service_map.get(service_name, f"{scheme}://{CENTRAL_SERVER_HOST}:{CENTRAL_SERVER_PORT}")

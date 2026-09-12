@@ -7,6 +7,7 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
+from config.ssl_config import client_verify
 from shared.security import internal_service_headers
 
 from shared.config import ServiceConfig
@@ -67,7 +68,7 @@ class LLMServiceClient:
             payload["temperature"] = temperature
 
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(verify=client_verify(self.base_url)) as client:
                 if hasattr(client, "headers"):
                     client.headers.update(internal_service_headers())
                 response = await asyncio.wait_for(
@@ -106,7 +107,7 @@ class LLMServiceClient:
 
     async def health_check(self) -> bool:
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(verify=client_verify(self.base_url)) as client:
                 response = await client.get(f"{self.base_url}/api/v1/health", timeout=5.0)
             if response.status_code != 200:
                 return False
@@ -121,7 +122,7 @@ class LLMServiceClient:
 
     async def get_model_info(self) -> Optional[Dict[str, Any]]:
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(verify=client_verify(self.base_url)) as client:
                 response = await client.get(f"{self.base_url}/api/v1/model-info", timeout=5.0)
             return response.json() if response.status_code == 200 else None
         except Exception as exc:

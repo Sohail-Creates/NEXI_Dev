@@ -4,8 +4,13 @@ from __future__ import annotations
 
 from collections import Counter
 from pathlib import Path
+import os
 
 import pytest
+
+
+# Deterministic, test-only key. Production startup fails closed without a key.
+os.environ.setdefault("NEXI_FERNET_KEY", "g2UnTbcWj1lTsK40oN1HOJE_gnm36gjiT25g3J2V1BA=")
 
 
 # These are interactive physical-device visualizers, not pytest suites. Keeping

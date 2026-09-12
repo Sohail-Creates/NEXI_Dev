@@ -1,5 +1,12 @@
 version: "3.8"
 
+x-tls-environment: &tls-environment
+  NEXI_TLS_ENABLED: "true"
+  NEXI_TLS_ALLOW_PLAINTEXT: "false"
+  NEXI_TLS_CERT_FILE: /app/config/certificates/nexi-local.crt
+  NEXI_TLS_KEY_FILE: /app/config/certificates/nexi-local.key
+  NEXI_TLS_CA_FILE: /app/config/certificates/nexi-local-ca.crt
+
 services:
   # 1. Central Server
   central:
@@ -9,11 +16,13 @@ services:
     container_name: nexi-central
     ports: ["8000:8000"]
     env_file: .env
+    environment: *tls-environment
     volumes:
+      - ./config:/app/config:ro
       - central_data:/app/data
       - ./logs:/app/logs
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD-SHELL", 'curl -f --cacert "$${NEXI_TLS_CA_FILE}" https://localhost:8000/health']
       interval: 10s
       timeout: 5s
       retries: 5
@@ -28,15 +37,17 @@ services:
     ports: ["8001:8001"]
     env_file: .env
     volumes:
+      - ./config:/app/config:ro
       - vision_models:/app/models
       - vision_data:/app/data
       - ./logs:/app/logs
     devices:
       - /dev/video0:/dev/video0
     environment:
-      - DISPLAY=${DISPLAY:-:0}
+      <<: *tls-environment
+      DISPLAY: ${DISPLAY:-:0}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      test: ["CMD-SHELL", 'curl -f --cacert "$${NEXI_TLS_CA_FILE}" https://localhost:8001/health']
       interval: 15s
       timeout: 10s
       retries: 5
@@ -61,17 +72,18 @@ services:
     ports: ["8002:8002"]
     env_file: .env
     volumes:
+      - ./config:/app/config:ro
+      - /run/pulse/native:/run/pulse/native
       - audio_data:/app/data
       - audio_models:/app/models
       - ./logs:/app/logs
     devices:
       - /dev/snd:/dev/snd
-    volumes:
-      - /run/pulse/native:/run/pulse/native
     environment:
-      - PULSE_SERVER=unix:/run/pulse/native
+      <<: *tls-environment
+      PULSE_SERVER: unix:/run/pulse/native
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      test: ["CMD-SHELL", 'curl -f --cacert "$${NEXI_TLS_CA_FILE}" https://localhost:8002/health']
       interval: 10s
       timeout: 5s
       retries: 5
@@ -88,11 +100,13 @@ services:
     container_name: nexi-tts
     ports: ["8003:8003"]
     env_file: .env
+    environment: *tls-environment
     volumes:
+      - ./config:/app/config:ro
       - tts_models:/app/models
       - ./logs:/app/logs
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      test: ["CMD-SHELL", 'curl -f --cacert "$${NEXI_TLS_CA_FILE}" https://localhost:8003/health']
       interval: 10s
       timeout: 5s
       retries: 5
@@ -106,12 +120,14 @@ services:
     container_name: nexi-teachme
     ports: ["8004:8004"]
     env_file: .env
+    environment: *tls-environment
     volumes:
+      - ./config:/app/config:ro
       - teachme_data:/app/data
       - teachme_indexes:/app/indexes
       - ./logs:/app/logs
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8004/health"]
+      test: ["CMD-SHELL", 'curl -f --cacert "$${NEXI_TLS_CA_FILE}" https://localhost:8004/health']
       interval: 10s
       timeout: 5s
       retries: 5
@@ -128,14 +144,16 @@ services:
     container_name: nexi-enrollment
     ports: ["8005:8005"]
     env_file: .env
+    environment: *tls-environment
     volumes:
+      - ./config:/app/config:ro
       - enrollment_data:/app/enrollment_data
       - ./logs:/app/logs
     devices:
       - /dev/video0:/dev/video0
       - /dev/snd:/dev/snd
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8005/health"]
+      test: ["CMD-SHELL", 'curl -f --cacert "$${NEXI_TLS_CA_FILE}" https://localhost:8005/health']
       interval: 10s
       timeout: 5s
       retries: 5
@@ -149,10 +167,12 @@ services:
     container_name: nexi-llm
     ports: ["8006:8006"]
     env_file: .env
+    environment: *tls-environment
     volumes:
+      - ./config:/app/config:ro
       - ./logs:/app/logs
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8006/api/v1/health"]
+      test: ["CMD-SHELL", 'curl -f --cacert "$${NEXI_TLS_CA_FILE}" https://localhost:8006/api/v1/health']
       interval: 10s
       timeout: 5s
       retries: 5
@@ -165,7 +185,9 @@ services:
       dockerfile: docker/nexctl.Dockerfile
     container_name: nexi-nexctl
     env_file: .env
+    environment: *tls-environment
     volumes:
+      - ./config:/app/config:ro
       - ./logs:/app/logs
       - /dev/video0:/dev/video0
       - /dev/snd:/dev/snd

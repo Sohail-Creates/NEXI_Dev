@@ -938,3 +938,32 @@ The audit is complete: all seven service reviews, the 13-requirement matrix, con
 Production code was not repaired, refactored or deleted. The pre-existing requirements change, YOLO artifact and nested Enrollment data/key directory were preserved. PROJECT.md is the audit deliverable; temporary runtime logs provide supporting evidence. Proceed with P0 remediation and repeat acceptance checks before claiming development or integration readiness.
 
 Final verification on 2026-09-08: all 36 required sections are present in order; 13 Sprint rows, 22 flow rows and 33 unique issues each have diagnosis and remediation entries. Score arithmetic was independently checked. No listeners remained on localhost ports 8000-8006. Git still shows only the pre-existing requirements.txt one-line deletion and existing untracked model/Enrollment directory, plus PROJECT.md. No pending audit sections remain.
+
+## Subsequent remediation verification — Phase 9 (2026-09-12)
+
+The preceding conclusions describe the original audit, not the subsequently
+remediated runtime. The complete Phase 9 table, actual security-control proofs,
+dependency report, and regression reconciliation are recorded in
+[docs/phase9-verification.md](docs/phase9-verification.md).
+
+The final consolidated run passed **62/62 in 217.36 seconds**: all **53/53**
+Phase 8 test identities were retained, with nine additional opt-in security
+checks, zero failures/errors, and no missing baseline coverage. Verification
+used CA-verified HTTPS, encrypted biometric fixtures, enforced authentication,
+dual-key transitions, and redacted logs. Physical devices and real billable
+model inference were not verified; the live LLM health response was degraded.
+
+The standalone dependency scan exited **1**, reporting **118 manifest/advisory
+entries and three unaudited manifests**: root/Audio resolution timed out,
+Central pins unavailable `anyio==4.1.1`, and Vision's dependency pins conflict.
+Unprovided advisory severity is explicitly unassessed and conservatively
+blocked, not fabricated as a CVSS rating. No findings were suppressed or
+silently remediated. All 13 newly installed audit-tool packages are exact-pinned
+and matched against installed versions in `requirements.txt`.
+
+**Phase 9 is not closed:** the real OpenRouter account rotation cycle remains
+unverified (the actual adapter passed against a controlled HTTPS provider),
+and the dependency assessment cannot clear the three unresolved manifests.
+Commercial certificates, secure production secret provisioning, and
+vulnerability remediation remain explicit deployment work. Existing committed
+legacy keys are not production secrets; Phase 10 artifacts were not deleted.

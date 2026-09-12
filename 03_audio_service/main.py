@@ -18,6 +18,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from shared.security import allowed_origins, InternalRouteAuthMiddleware, UploadGuardMiddleware
 from shared.api_errors import install_error_handlers
+from shared.request_middleware import install_request_observability
 
 from audio_service.config import (
     API_CONFIG,
@@ -232,11 +233,11 @@ async def lifespan(app: FastAPI):
         
         orchestrator = ConversationOrchestrator(
             conversation_state_manager=conversation_state_manager,
-            audio_service_url="http://localhost:8002",
-            vision_service_url="http://localhost:8001",
-            teachme_service_url="http://localhost:8005",
-            central_service_url="http://localhost:8000",
-            tts_service_url="http://localhost:8003"
+            audio_service_url="https://localhost:8002",
+            vision_service_url="https://localhost:8001",
+            teachme_service_url="https://localhost:8004",
+            central_service_url="https://localhost:8000",
+            tts_service_url="https://localhost:8003"
         )
         
         # Start orchestrator session pool
@@ -329,6 +330,7 @@ app.add_middleware(
 # Exempt: /health endpoints (should always be available)
 rate_limit_middleware = create_rate_limit_middleware()
 app.middleware("http")(rate_limit_middleware)
+install_request_observability(app, "audio")
 
 # Include routers
 # Week 1: Basic audio recording functionality
@@ -522,10 +524,12 @@ async def trigger_queue_processing():
 
 
 if __name__ == "__main__":
+    from config.ssl_config import get_tls_config
     uvicorn.run(
         "main:app",
         host=API_CONFIG["host"],
         port=API_CONFIG["port"],
         reload=False,
-        log_level=LOG_LEVEL.lower()
+        log_level=LOG_LEVEL.lower(),
+        **get_tls_config().uvicorn_kwargs(),
     )

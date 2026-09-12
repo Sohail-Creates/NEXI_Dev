@@ -32,7 +32,7 @@ class ResourcePool:
     """Thread-safe resource pool for camera and YOLO object detector"""
     
     def __init__(self, camera_timeout: int = 10,
-                 central_server_url: str = "http://localhost:8000",
+                 central_server_url: str = "https://localhost:8000",
                  enable_object_detection: bool = True, object_model_name: str = "yolov8n",
                  release_watchdog_timeout: float = 3.0):
         """

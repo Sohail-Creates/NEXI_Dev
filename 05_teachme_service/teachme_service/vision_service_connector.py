@@ -16,6 +16,7 @@ from typing import Optional, Dict, Any
 from datetime import datetime, timedelta
 from .config import vision_config
 from shared.security import internal_service_headers
+from config.ssl_config import client_ssl_context
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,7 @@ class VisionServiceConnector:
             try:
                 start_time = datetime.utcnow()
                 
-                async with aiohttp.ClientSession() as session:
+                async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=client_ssl_context(self.base_url))) as session:
                     url = f"{self.base_url}{vision_config.ANALYZE_ENDPOINT}"
                     payload = {"object_name": object_name}
                     
@@ -134,7 +135,7 @@ class VisionServiceConnector:
             True if service is healthy, False otherwise
         """
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=client_ssl_context(self.base_url))) as session:
                 url = f"{self.base_url}{vision_config.HEALTH_ENDPOINT}"
                 
                 async with session.get(

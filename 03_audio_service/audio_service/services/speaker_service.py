@@ -28,6 +28,7 @@ from audio_service.utils.audio_preprocessing import (
 )
 from audio_service.utils.audio_utils import record_and_save_audio
 from audio_service.utils.cache import get_default_cache
+from shared.secure_storage import ENCRYPTED_PREFIX, RotatingFernet
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +78,9 @@ def _write_json_store(path: Path, records: Dict[str, np.ndarray]) -> None:
     import tempfile
     fd, temporary = tempfile.mkstemp(dir=str(path.parent), prefix=path.name, suffix=".tmp")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, allow_nan=False, separators=(",", ":"))
+        encoded = json.dumps(payload, allow_nan=False, separators=(",", ":")).encode("utf-8")
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(RotatingFernet().encrypt(encoded))
         Path(temporary).replace(path)
     finally:
         Path(temporary).unlink(missing_ok=True)
@@ -87,9 +89,17 @@ def _write_json_store(path: Path, records: Dict[str, np.ndarray]) -> None:
 def migrate_legacy_pickle(legacy_path: Path, json_path: Path) -> Dict[str, int]:
     """Idempotently migrate a trusted legacy file through a restricted loader."""
     if json_path.exists():
-        with json_path.open("r", encoding="utf-8") as handle:
-            existing = _validated_embeddings(json.load(handle).get("speakers", {}))
-        return {"examined": len(existing), "updated": 0, "unchanged": len(existing)}
+        raw = json_path.read_bytes()
+        was_plaintext = not raw.startswith(ENCRYPTED_PREFIX)
+        cipher = RotatingFernet()
+        needs_rotation = not was_plaintext and not cipher.is_current(raw)
+        payload = json.loads((raw if was_plaintext else cipher.decrypt(raw)).decode("utf-8"))
+        existing = _validated_embeddings(payload.get("speakers", {}))
+        if was_plaintext or needs_rotation:
+            _write_json_store(json_path, existing)
+        updated = was_plaintext or needs_rotation
+        return {"examined": len(existing), "updated": len(existing) if updated else 0,
+                "unchanged": 0 if updated else len(existing)}
     if not legacy_path.exists():
         return {"examined": 0, "updated": 0, "unchanged": 0}
     with legacy_path.open("rb") as handle:
@@ -177,8 +187,7 @@ class SpeakerService:
             if migration["updated"]:
                 logger.info("Migrated %d legacy speaker embeddings", migration["updated"])
             if self.embeddings_file.exists():
-                with self.embeddings_file.open("r", encoding="utf-8") as f:
-                    payload = json.load(f)
+                payload = json.loads(RotatingFernet().decrypt(self.embeddings_file.read_bytes()).decode("utf-8"))
                 if payload.get("schema_version") != SPEAKER_STORE_SCHEMA_VERSION:
                     raise SpeakerServiceError("Unsupported speaker store schema")
                 if payload.get("embedding_dimension") != SPEAKER_EMBEDDING_DIMENSION:

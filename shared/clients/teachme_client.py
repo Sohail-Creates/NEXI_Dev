@@ -6,6 +6,7 @@ Handles object learning, fact storage, and knowledge retrieval.
 """
 
 import httpx
+from config.ssl_config import client_verify
 from shared.security import internal_service_headers
 import logging
 from typing import Optional, List
@@ -67,7 +68,7 @@ class TeachMeServiceClient:
                     error_message="TeachMe Service is temporarily unavailable"
                 )
 
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, verify=client_verify(self.base_url)) as client:
                 payload = {
                     "object_name": object_name,
                     "description": description
@@ -143,7 +144,7 @@ class TeachMeServiceClient:
                     error_message="TeachMe Service is temporarily unavailable"
                 )
 
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, verify=client_verify(self.base_url)) as client:
                 payload = {
                     "topic": fact_topic,
                     "content": fact_content
@@ -216,7 +217,7 @@ class TeachMeServiceClient:
                     error_message="TeachMe Service is temporarily unavailable"
                 )
 
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, verify=client_verify(self.base_url)) as client:
                 params = {"query": query}
                 if user_id:
                     params["user_id"] = user_id
@@ -286,7 +287,7 @@ class TeachMeServiceClient:
                     error_message="TeachMe Service is temporarily unavailable"
                 )
 
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, verify=client_verify(self.base_url)) as client:
                 response = await client.delete(
                     f"{self.base_url}/forget/{item_type}/{item_id}",
                     headers=internal_service_headers(),
@@ -334,7 +335,7 @@ class TeachMeServiceClient:
         Used to determine if service is up.
         """
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(3.0)) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(3.0), verify=client_verify(self.base_url)) as client:
                 response = await client.get(f"{self.base_url}/health")
                 if response.status_code == 200:
                     return ServiceCallResult(

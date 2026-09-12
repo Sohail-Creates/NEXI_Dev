@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from shared.security import allowed_origins
 from shared.api_errors import error_response, install_error_handlers
+from shared.request_middleware import install_request_observability
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from .models import LearningRequest, LearningType
 from .knowledge_base import knowledge_base
@@ -193,6 +194,8 @@ async def rate_limit_middleware(request: Request, call_next):
     
     response = await call_next(request)
     return response
+
+install_request_observability(app, "teachme")
 
 from .services.query_history_store import QueryHistoryStore
 from .services.query_rotation_policy import QueryRotationPolicy

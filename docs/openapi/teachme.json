@@ -2005,8 +2005,8 @@
   },
   "servers": [
     {
-      "description": "Local service",
-      "url": "http://localhost:8004"
+      "description": "Local service (TLS)",
+      "url": "https://localhost:8004"
     }
   ]
 }

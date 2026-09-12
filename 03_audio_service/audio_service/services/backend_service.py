@@ -13,6 +13,7 @@ from typing import Optional, Dict, Any
 from urllib.parse import urljoin
 import requests
 from requests.adapters import HTTPAdapter
+from config.ssl_config import client_verify
 from urllib3.util.retry import Retry
 
 import sys
@@ -98,6 +99,7 @@ class BackendService:
             requests.Session: Configured session
         """
         session = requests.Session()
+        session.verify = client_verify(self.base_url)
         
         # Configure retry strategy
         retry_strategy = Retry(

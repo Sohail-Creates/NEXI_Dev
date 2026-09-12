@@ -196,11 +196,11 @@ def get_trace_headers() -> dict:
             ...
     
     Returns:
-        Dictionary with X-Trace-ID header
+        Dictionary with the shared X-Correlation-ID header
     """
     trace_id = get_trace_id()
     if trace_id:
-        return {"X-Trace-ID": trace_id}
+        return {"X-Correlation-ID": trace_id}
     return {}
 
 

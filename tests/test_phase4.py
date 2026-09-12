@@ -101,9 +101,14 @@ def test_a_reembedding_migration_is_idempotent(capsys):
         assert dimensions == [SEMANTIC_EMBEDDING_DIMENSION] * 3
 
 
-async def test_a_real_http_learn_then_search():
+async def test_a_real_http_learn_then_search(monkeypatch):
     with tempfile.TemporaryDirectory() as directory:
         storage_file = Path(directory) / "knowledge.json"
+        from config.ssl_config import generate_local_certificates
+        tls = generate_local_certificates(Path(directory) / "tls")
+        monkeypatch.setenv("NEXI_TLS_CERT_FILE", str(tls.cert_file))
+        monkeypatch.setenv("NEXI_TLS_KEY_FILE", str(tls.key_file))
+        monkeypatch.setenv("NEXI_TLS_CA_FILE", str(tls.ca_file))
         initialize(storage_file.with_suffix(".sqlite3"))
         environment = os.environ.copy()
         environment["STORAGE_FILE"] = str(storage_file)
@@ -111,6 +116,7 @@ async def test_a_real_http_learn_then_search():
             str(ROOT / "venv" / "Scripts" / "python.exe"),
             "-m", "uvicorn", "teachme_service.app:app",
             "--app-dir", str(TEACHME_DIR), "--host", "127.0.0.1", "--port", "8014",
+            "--ssl-certfile", str(tls.cert_file), "--ssl-keyfile", str(tls.key_file),
         ]
         process = subprocess.Popen(
             command,
@@ -127,14 +133,18 @@ async def test_a_real_http_learn_then_search():
             deadline = time.monotonic() + 60
             while time.monotonic() < deadline:
                 try:
-                    if httpx.get("http://127.0.0.1:8014/health", timeout=2).status_code == 200:
+                    # The health route includes Vision's existing bounded 2s
+                    # probe. Recorded HTTPS responses took 2.008-2.046s; a 2s
+                    # caller deadline discarded real HTTP 200 responses.
+                    # Keep the overall startup deadline and assertions unchanged.
+                    if httpx.get("https://127.0.0.1:8014/health", timeout=5, verify=str(tls.ca_file)).status_code == 200:
                         break
                 except httpx.HTTPError:
                     time.sleep(0.25)
             else:
                 raise AssertionError("TeachMe did not become ready")
 
-            connector = TeachMeConnector(base_url="http://127.0.0.1:8014", config={"max_retries": 1})
+            connector = TeachMeConnector(base_url="https://127.0.0.1:8014", config={"max_retries": 1})
             try:
                 learned = await connector.learn_item(
                     "fact",
@@ -349,6 +359,9 @@ class _HTTPResponse:
 class _AsyncHTTPClient:
     response = None
     last_payload = None
+
+    def __init__(self, **kwargs):
+        assert kwargs.get("verify") is not False
 
     async def __aenter__(self):
         return self

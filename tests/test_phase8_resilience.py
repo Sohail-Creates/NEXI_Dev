@@ -10,6 +10,7 @@ import time
 
 import pytest
 import requests
+from config.ssl_config import generate_local_certificates
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +36,8 @@ def _spawn(app_dir: str, target: str, port: int, environment: dict[str, str]) ->
             str(PYTHON), "-m", "uvicorn", target,
             "--app-dir", str(ROOT / app_dir),
             "--host", "127.0.0.1", "--port", str(port), "--log-level", "warning",
+            "--ssl-certfile", environment["NEXI_TLS_CERT_FILE"],
+            "--ssl-keyfile", environment["NEXI_TLS_KEY_FILE"],
         ],
         cwd=ROOT,
         env=environment,
@@ -43,7 +46,7 @@ def _spawn(app_dir: str, target: str, port: int, environment: dict[str, str]) ->
     )
 
 
-def _ready(process: subprocess.Popen, url: str, timeout: float = 120.0) -> dict:
+def _ready(process: subprocess.Popen, url: str, ca_file: str, timeout: float = 120.0) -> dict:
     deadline = time.monotonic() + timeout
     last_error = "not started"
     while time.monotonic() < deadline:
@@ -52,7 +55,7 @@ def _ready(process: subprocess.Popen, url: str, timeout: float = 120.0) -> dict:
         try:
             # Vision's honest degraded health probe includes one bounded attempt
             # to contact the camera authority, so allow that probe to complete.
-            response = requests.get(url, timeout=15)
+            response = requests.get(url, timeout=15, verify=ca_file)
             if response.status_code == 200:
                 return response.json()
             last_error = f"HTTP {response.status_code}: {response.text[:200]}"
@@ -69,12 +72,18 @@ def _kill(process: subprocess.Popen) -> None:
 
 
 def test_resilience_all_seven_services_forced_kill_and_restart(tmp_path) -> None:
+    tls = generate_local_certificates(tmp_path / "tls")
     environment = os.environ.copy()
     environment.update(
         {
             "AUTH_ENFORCEMENT_ENABLED": "true",
             "NEXI_INTERNAL_SERVICE_TOKEN": "phase8-resilience-service-token",
             "NEXI_JWT_SECRET": "phase8-resilience-jwt-secret-at-least-32-bytes",
+            "NEXI_FERNET_KEY": "g2UnTbcWj1lTsK40oN1HOJE_gnm36gjiT25g3J2V1BA=",
+            "NEXI_TLS_ENABLED": "true",
+            "NEXI_TLS_CERT_FILE": str(tls.cert_file),
+            "NEXI_TLS_KEY_FILE": str(tls.key_file),
+            "NEXI_TLS_CA_FILE": str(tls.ca_file),
             "CLOUD_SYNC_ENABLED": "false",
             "CENTRAL_DB_PATH": str(tmp_path / "central.sqlite3"),
             "STORAGE_FILE": str(tmp_path / "knowledge.json"),
@@ -118,7 +127,7 @@ def test_resilience_all_seven_services_forced_kill_and_restart(tmp_path) -> None
     try:
         health = {}
         for name, _app_dir, _target, health_path, port in SERVICES:
-            health[name] = _ready(processes[name], f"http://127.0.0.1:{port}{health_path}")
+            health[name] = _ready(processes[name], f"https://127.0.0.1:{port}{health_path}", str(tls.ca_file))
         smoke = subprocess.run(
             [str(PYTHON), str(ROOT / "scripts" / "health_check_all.py")],
             cwd=ROOT,
@@ -141,7 +150,7 @@ def test_resilience_all_seven_services_forced_kill_and_restart(tmp_path) -> None
                 restart_target = "phase8_missing_app:app"
             second = _spawn(app_dir, restart_target, port, environment)
             processes[name] = second
-            after = _ready(second, f"http://127.0.0.1:{port}{health_path}")
+            after = _ready(second, f"https://127.0.0.1:{port}{health_path}", str(tls.ca_file))
             assert second.pid != first_pid
             restarted += 1
             print(

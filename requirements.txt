@@ -58,6 +58,20 @@ tifffile==2026.2.16
 # ========== Testing/Dev ==========
 pytest==7.4.3
 pytest-asyncio==0.21.1
+pip-audit==2.10.1
+# Newly installed audit-tool dependencies pinned for reproducible teammate setup.
+CacheControl==0.14.4
+boolean.py==5.0
+cyclonedx-python-lib==11.12.0
+defusedxml==0.7.1
+license-expression==30.4.4
+packageurl-python==0.17.6
+pip-api==0.0.35
+pip-requirements-parser==32.0.1
+py-serializable==2.1.0
+sortedcontainers==2.4.0
+tomli==2.4.1
+tomli-w==1.2.0
 
 # ========== Google/Cloud ==========
 google-ai-generativelanguage==0.6.15
