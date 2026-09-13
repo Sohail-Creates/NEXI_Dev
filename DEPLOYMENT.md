@@ -351,6 +351,11 @@ are not ignored or automatically upgraded. `pip-audit==2.10.1` is pinned in the
 root requirements; service manifests still need separately coordinated repair.
 The local HTTPS OpenRouter fixture proves adapter rotation behavior only; real
 provider keys can only be issued/revoked by their owner and provider.
+Real-account OpenRouter rotation is a permanent operator runbook item, not a
+repository code deliverable. Before deployment, the operator provisions the
+funded current key, stages any previous key for the transition, verifies access,
+and revokes the previous key with the provider before removing it from config.
+Repository verification uses fake non-billing credentials only.
 
 Phase 9's protected baseline retains all 53 Phase 8 test identities and outcome
 assertions. Disclosed harness adaptations are CA-verified HTTPS URLs and listener

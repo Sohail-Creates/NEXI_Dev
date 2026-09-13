@@ -1,6 +1,33 @@
 # NEXI Robot — Complete Setup Guide
 
-**One-command Docker deployment** + **Local development setup** for the full NEXI autonomous robot stack.
+## Verified deployment status (Phase 10, 2026-09-13)
+
+The native Phase 10 close-out is recorded by user acceptance of the revised scope;
+Docker tasks F/G/H remain pending. Central's corrected per-service requirements
+were installed into a fresh isolated environment, and its real application started
+and returned HTTP 200 from `/health`.
+
+Vision's required-only environment now installs successfully, passes `pip check`,
+and imports and starts the real application over CA-verified HTTPS. Its health
+response remains honestly degraded with `face_model: unavailable`; YOLO loads.
+DeepFace and Keras remain optional. The protected suite passes 62/62 after the
+authorized FastAPI/Pydantic/NumPy alignment and shared runtime additions.
+
+Service environments are independent: Vision explicitly pins `anyio==4.15.1`,
+while Central, TeachMe, and root retain `4.12.1`. Cross-service version equality
+is not an acceptance requirement. Vision's explicitly pinned manifest was freshly
+installed and its real app import and HTTPS health check passed again.
+
+The recorded acceptance is not a blanket production-readiness certification.
+This limited verification does not prove seven independent fresh installations
+or completion of previously unexecuted retry consolidation and dead-code cleanup.
+
+Docker Desktop must be installed and running on the host before Phase 10's
+container builds, Compose verification, and fresh-checkout container acceptance
+can execute. These tasks have not been verified. The Docker and native setup
+instructions below are historical guidance, not a validated handover procedure;
+do not rely on their one-command deployment claims until the remaining gates
+pass. See [the verification record](docs/phase9-verification.md).
 
 ---
 

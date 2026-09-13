@@ -961,9 +961,25 @@ blocked, not fabricated as a CVSS rating. No findings were suppressed or
 silently remediated. All 13 newly installed audit-tool packages are exact-pinned
 and matched against installed versions in `requirements.txt`.
 
-**Phase 9 is not closed:** the real OpenRouter account rotation cycle remains
-unverified (the actual adapter passed against a controlled HTTPS provider),
-and the dependency assessment cannot clear the three unresolved manifests.
+The narrow close-out root/Audio retry completed in 158.671 seconds with the
+unchanged 180-second limit: 121 findings and zero audit errors. The accumulated
+assessment is now 239 findings and two unresolved manifests (Central/Vision);
+the other service results above were retained, not rerun. No pins changed.
+
+**Phase 9 is not closed:** the dependency assessment has unresolved manifests.
+The OpenRouter dual-key mechanism is verified with a controlled HTTPS provider;
+real-account rotation is a permanent operator runbook item, not a code deliverable.
 Commercial certificates, secure production secret provisioning, and
 vulnerability remediation remain explicit deployment work. Existing committed
 legacy keys are not production secrets; Phase 10 artifacts were not deleted.
+
+Phase 10 narrow dependency resume: the tested environment's full 215-package
+freeze is recorded in the verification report and was confirmed unchanged after
+the checks. Central's anyio pin was corrected to 4.12.1; its requirements install
+in a clean temporary environment, but importing Central fails on missing
+pydantic_settings (other required packages are also absent). Vision's explicit
+TensorFlow pin was removed after actual YOLO inference succeeded with TensorFlow
+blocked and face_model remained unavailable. Its remaining keras==2.13.1 pin
+still prevents standalone resolution through DeepFace's TensorFlow dependency.
+No other package pin was changed. Both Docker commands remain unavailable;
+Phase 10 is not closed.
