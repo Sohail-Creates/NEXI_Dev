@@ -203,15 +203,43 @@ from .services.query_rotation_policy import QueryRotationPolicy
 history_store = QueryHistoryStore()
 rotation_policy = QueryRotationPolicy(storage_dir=history_store.storage_dir)
 
+app.state.embedding_model = "loading"
+app.state.embedding_task = None
+app.state.vision_task = None
+app.state.vision_healthy = False
+
+
+def require_embedding_ready():
+    """Fail promptly without changing the established request/response schema."""
+    if app.state.embedding_model != "ready":
+        message = ("Embedding model still loading" if app.state.embedding_model == "loading"
+                   else "Embedding model unavailable")
+        raise HTTPException(status_code=503, detail=message)
+
+
+async def initialize_embedding_model():
+    # Let lifespan startup complete; heavy package imports run off the event loop.
+    await asyncio.sleep(0)
+    try:
+        await asyncio.to_thread(knowledge_base.embedding_client.embed_query, "NEXI readiness")
+    except Exception:
+        app.state.embedding_model = "unavailable"
+        logger.exception("Semantic embedding model initialization failed")
+    else:
+        app.state.embedding_model = "ready"
+        logger.info("Semantic embedding model initialized")
+
+
+async def refresh_vision_health():
+    app.state.vision_healthy = await get_vision_connector().health_check()
+
 @app.on_event("startup")
 async def startup_event():
     # ... existing code ...
     rotation_policy.run_cleanup()
 
-    # Readiness includes the local semantic model: do not defer a potentially
-    # expensive or missing-artifact failure to the first user request.
-    await asyncio.to_thread(knowledge_base.embedding_client.embed_query, "NEXI readiness")
-    logger.info(" Semantic embedding model initialized")
+    app.state.embedding_model = "loading"
+    app.state.embedding_task = asyncio.create_task(initialize_embedding_model())
     
     # NEW: Initialize resilient systems
     try:
@@ -224,8 +252,9 @@ async def startup_event():
     try:
         # Initialize Vision Service connector with circuit breaker (with timeout to prevent blocking)
         try:
-            await asyncio.wait_for(init_vision_connector(), timeout=5.0)
-            logger.info(" Vision Service connector initialized (circuit breaker active)")
+            get_vision_connector()
+            app.state.vision_task = asyncio.create_task(refresh_vision_health())
+            logger.info("Vision health probe scheduled (circuit breaker active)")
         except asyncio.TimeoutError:
             logger.warning("Vision Service connector initialization timed out, continuing without Vision Service")
     except Exception as e:
@@ -254,6 +283,11 @@ async def startup_event():
 async def shutdown_event():
     """Graceful shutdown handler"""
     logger.info("TeachMe Service shutting down...")
+    tasks = [task for task in (app.state.embedding_task, app.state.vision_task)
+             if task is not None]
+    for task in tasks:
+        task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True)
     try:
         shutdown_manager = get_shutdown_manager()
         await shutdown_manager.shutdown("shutdown")
@@ -288,17 +322,21 @@ async def health_check():
         
         # Check Vision Service using resilient connector
         vision_connector = get_vision_connector()
-        vision_healthy = await vision_connector.health_check()
+        # Use the last completed probe; no downstream wait in this health route.
+        if app.state.vision_task is None or app.state.vision_task.done():
+            app.state.vision_task = asyncio.create_task(refresh_vision_health())
+        vision_healthy = app.state.vision_healthy
         vision_metrics = vision_connector.get_metrics()
         
         # Overall status
-        overall_healthy = kb_healthy  # KB is essential, Vision is optional
-        status_code = 200 if overall_healthy else 503
+        overall_healthy = kb_healthy and app.state.embedding_model == "ready"
+        status_code = 200 if kb_healthy else 503
         
         return {
             "status": "healthy" if overall_healthy else "degraded",
             "timestamp": datetime.utcnow().isoformat(),
             "checks": {
+                "embedding_model": app.state.embedding_model,
                 "knowledge_base": {
                     "status": "healthy" if kb_healthy else "unhealthy",
                     "items_count": counts['total'],
@@ -357,7 +395,8 @@ async def health_detailed():
         }
 
 @app.post("/learn", status_code=status.HTTP_201_CREATED)
-async def learn_item(request: LearningRequest, _auth=Depends(require_api_key)):
+async def learn_item(request: LearningRequest, _auth=Depends(require_api_key),
+                     _ready=Depends(require_embedding_ready)):
     """
     Learn new object/fact with validation, security, and embeddings
     Fully async with performance tracking - PRODUCTION READY
@@ -537,6 +576,7 @@ async def search_by_embedding(
     top_k: int = Query(5, description="Number of results", ge=1, le=50),
     similarity_threshold: float = Query(0.5, description="Min similarity (0.0-1.0)", ge=0.0, le=1.0),
     _auth=Depends(require_api_key),
+    _ready=Depends(require_embedding_ready),
 ):
     """
     Search for similar objects using embeddings (Phase 2)
@@ -804,7 +844,8 @@ async def search_advanced(
         raise HTTPException(status_code=500, detail="Advanced search failed") from e
 
 @app.post("/knowledge/learn-batch")
-async def learn_batch(requests_list: List[LearningRequest], _auth=Depends(require_api_key)):
+async def learn_batch(requests_list: List[LearningRequest], _auth=Depends(require_api_key),
+                      _ready=Depends(require_embedding_ready)):
     """
     Batch learning endpoint (Phase 3 Optimization)
     Learn multiple objects/facts in one call
@@ -872,6 +913,7 @@ async def get_related_items(
     item_id: str,
     top_k: int = Query(5, ge=1, le=20),
     _auth=Depends(require_api_key),
+    _ready=Depends(require_embedding_ready),
 ):
     """
     Find related objects through embeddings (Phase 5 Intelligence)

@@ -13,23 +13,11 @@ httpx==0.25.0
 # File Operations
 aiofiles==23.2.1
 
-# Image Processing
-pillow==10.1.0
-
-# Audio Processing
-sounddevice==0.4.6
-soundfile==0.12.1
-
 # Data Processing
 numpy==1.24.3
 
-# Streamlit UI (Week 3)
-streamlit==1.28.0
-streamlit-webrtc==0.47.1
-
-# Video Processing
-# Note: Install av separately first: pip install av==14.0.0 --only-binary :all:
-av==14.0.0
-
-# HTTP Requests
-requests==2.31.0
+# Shared settings, session claims, and mandatory biometric/TLS encryption.
+# Settings 2.2.1 supports this service's existing Pydantic 2.5.0 pin.
+pydantic-settings==2.2.1
+PyJWT==2.10.1
+cryptography==46.0.5

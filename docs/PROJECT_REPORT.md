@@ -9,6 +9,11 @@
 
 ---
 
+> ARCHIVED PRE-SPRINT-2 REPORT (May 2026). This is not a current setup or
+> production-readiness claim. Its HTTP, emotion/Urdu, alternate Central app, and
+> production-ready descriptions are superseded by the actual application and
+> [final native audit](final-native-audit.md). Retained as historical evidence.
+
 ## EXECUTIVE SUMMARY
 
 NEXI is a sophisticated microservices-based conversational AI robot system designed to provide personalized, context-aware interactions through multimodal input (voice, visual, text). The system combines wake word detection, speaker verification, speech recognition, computer vision (face/emotion/object detection), knowledge management, and large language model inference into a cohesive, distributed architecture.

@@ -44,7 +44,6 @@ async def store_user_conversation(
     {
         "user_message": "Tell me about gardening",
         "assistant_response": "Flowers are amazing...",
-        "mood": "happy",
         "language": "en",
         "metadata": {}  // optional
     }
@@ -72,7 +71,6 @@ async def store_user_conversation(
             )
         
         # Get optional fields
-        mood = body.get("mood", "neutral")
         language = body.get("language", "en")
         metadata = body.get("metadata", {})
         
@@ -81,7 +79,6 @@ async def store_user_conversation(
             user_id=user_id,
             user_message=user_message,
             assistant_response=assistant_response,
-            mood=mood,
             language=language,
             metadata=metadata
         )
@@ -92,7 +89,7 @@ async def store_user_conversation(
                 detail="Failed to store conversation"
             )
         
-        logger.info(f"[CONVERSATION] Stored for user {user_id} (mood: {mood}, lang: {language})")
+        logger.info(f"[CONVERSATION] Stored for user {user_id} (lang: {language})")
         
         return {
             "status": "success",

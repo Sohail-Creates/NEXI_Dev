@@ -11,6 +11,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config.ssl_config import client_verify
 from datetime import datetime
+from dotenv import load_dotenv
+
+# Match the service launchers' environment without overriding supplied values.
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 SERVICES = {
     "Central Server": "https://localhost:8000/health",
@@ -37,11 +41,11 @@ async def check_service_health(name: str, url: str, client: httpx.AsyncClient) -
         else:
             print(f"  [FAIL] {name:25} - HTTP {resp.status_code}")
             return False
-    except asyncio.TimeoutError:
-        print(f"  [TIMEOUT] {name:25} - No response")
+    except (asyncio.TimeoutError, httpx.TimeoutException) as e:
+        print(f"  [TIMEOUT] {name:25} - {type(e).__name__}: No response")
         return False
     except Exception as e:
-        print(f"  [ERROR] {name:25} - {str(e)}")
+        print(f"  [ERROR] {name:25} - {type(e).__name__}: {e}")
         return False
 
 async def main():

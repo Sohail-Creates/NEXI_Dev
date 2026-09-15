@@ -17,7 +17,6 @@ conversations.json = {
             "timestamp": "2026-03-08T15:45:00Z",
             "user_message": "Tell me about gardening",
             "assistant_response": "Flowers are amazing...",
-            "mood": "happy",
             "language": "en",
             "metadata": {}
         },
@@ -65,10 +64,17 @@ def _is_cache_valid() -> bool:
 
 
 def load_conversations() -> Dict[str, Any]:
-    return {"conversations": read_records("conversations")}
+    records = read_records("conversations")
+    # Historical imports may contain this retired field; never expose it in
+    # the live schema. The next normal save also removes it from stored rows.
+    for record in records:
+        record.pop("mood", None)
+    return {"conversations": records}
 
 
 def save_conversations(data: Dict[str, Any]) -> bool:
+    for record in data["conversations"]:
+        record.pop("mood", None)
     write_records("conversations", data["conversations"])
     return True
 
@@ -78,7 +84,6 @@ def add_conversation(
     user_id: str,
     user_message: str,
     assistant_response: str,
-    mood: Optional[str] = None,
     language: Optional[str] = "en",
     metadata: Optional[Dict[str, Any]] = None
 ) -> bool:
@@ -89,7 +94,6 @@ def add_conversation(
         user_id: User identifier
         user_message: What the user said
         assistant_response: How NEXI responded
-        mood: Detected mood (optional)
         language: Language code (en, ur, etc.)
         metadata: Additional metadata (optional)
         
@@ -105,7 +109,6 @@ def add_conversation(
             "timestamp": datetime.utcnow().isoformat(),
             "user_message": user_message,
             "assistant_response": assistant_response,
-            "mood": mood or "neutral",
             "language": language,
             "metadata": metadata or {}
         }

@@ -144,6 +144,20 @@ async def test_a_real_http_learn_then_search(monkeypatch):
             else:
                 raise AssertionError("TeachMe did not become ready")
 
+            # Listening and semantic readiness are separate contracts. Poll the
+            # explicit state rather than issuing learn during model warm-up.
+            ready_deadline = time.monotonic() + 120
+            while time.monotonic() < ready_deadline:
+                health = httpx.get("https://127.0.0.1:8014/health", timeout=5,
+                                   verify=str(tls.ca_file))
+                state = health.json()["checks"]["embedding_model"]
+                if state == "ready":
+                    break
+                assert state == "loading", health.text
+                time.sleep(2)
+            else:
+                raise AssertionError("TeachMe embedding model did not become ready")
+
             connector = TeachMeConnector(base_url="https://127.0.0.1:8014", config={"max_retries": 1})
             try:
                 learned = await connector.learn_item(

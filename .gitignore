@@ -8,6 +8,7 @@ __pycache__/
 # Virtual environments
 venv/
 venv_rag/
+venv-audit*/
 .env
 *.env.local
 
@@ -43,3 +44,5 @@ build/
 .env
 *.env.local
 config/certificates/
+06_enrollment_service/encryption.key
+06_enrollment_service/06_enrollment_service/encryption.key

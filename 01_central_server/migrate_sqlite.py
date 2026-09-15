@@ -56,13 +56,17 @@ def migrate(source_dir, database, allow_missing_users=False):
                         raise ValueError(f"users[{index}]: invalid {key} type; migration stopped")
             else:
                 expected = {"conversation_id", "user_id", "timestamp", "user_message",
-                            "assistant_response", "mood", "language", "metadata"}
-                if set(record) != expected or not isinstance(record["metadata"], dict):
+                            "assistant_response", "language", "metadata"}
+                # Accept the old source shape for archival migration parity;
+                # mood is not part of the current conversation schema.
+                if set(record) not in (expected, expected | {"mood"}) or not isinstance(record["metadata"], dict):
                     raise ValueError(f"conversations[{index}]: unexpected schema; migration stopped")
                 if any(not isinstance(record[key], str) for key in expected - {"metadata", "language"}):
                     raise ValueError(f"conversations[{index}]: unexpected type; migration stopped")
                 if record["language"] is not None and not isinstance(record["language"], str):
                     raise ValueError(f"conversations[{index}]: invalid language; migration stopped")
+                if "mood" in record and not isinstance(record["mood"], str):
+                    raise ValueError(f"conversations[{index}]: invalid legacy mood; migration stopped")
             json.dumps(record, allow_nan=False)
         sources[table] = (data, hashlib.sha256(raw).hexdigest())
     initialize(database)

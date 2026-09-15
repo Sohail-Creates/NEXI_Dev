@@ -36,7 +36,7 @@ async def health_check_root():
         service="Vision Service",
         version="4.0.0",
         status="operational",
-        features=["face_detection", "face_embeddings", "emotion_analysis", "video_streaming"],
+        features=["face_detection", "face_embeddings", "video_streaming"],
         timestamp=datetime.utcnow().isoformat()
     )
 

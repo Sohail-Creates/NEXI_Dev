@@ -9,6 +9,12 @@
 
 ---
 
+> ARCHIVED PRE-SPRINT-2 FLOW (May 2026). Its hybrid/offline LLM architecture,
+> unrestricted conversational descriptions, and HTTP setup are not the current
+> contract. Central now owns the restricted TeachMe-grounded boundary; provider
+> failures are failures, not offline answers. Use the current run guide and
+> [final native audit](final-native-audit.md), not this historical flow, for setup.
+
 ## EXECUTIVE SUMMARY - KEY ARCHITECTURAL DECISIONS
 
 ## System Overview
