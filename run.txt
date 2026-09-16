@@ -3,8 +3,8 @@
 # Open SEVEN terminals, each at this repository root. Copy only the section
 # for that terminal. Each service uses its own isolated venv; do not use the
 # root monolithic requirements.txt. Ctrl+C stops that terminal's service.
-# The venv-audit-handover environments are the fresh environments verified by
-# the final audit. On a fresh clone, each section creates its own environment.
+# The plain `venv` environments are the single per-service environments verified
+# by the final audit. On a fresh clone, each section creates its own environment.
 # First-time prerequisites (do not overwrite an existing .env or key):
 #   Copy .env.example to .env ONLY if .env does not exist. Configure the shared
 #   JWT/service secrets, Fernet key/file, and provider credentials securely.
@@ -24,8 +24,8 @@
 # not proof that every hardware/provider-dependent feature works.
 
 # === Central -- port 8000 ===
-if (-not (Test-Path .\01_central_server\venv-audit-handover\Scripts\python.exe)) { python -m venv .\01_central_server\venv-audit-handover }
-& .\01_central_server\venv-audit-handover\Scripts\Activate.ps1
+if (-not (Test-Path .\01_central_server\venv\Scripts\python.exe)) { python -m venv .\01_central_server\venv }
+& .\01_central_server\venv\Scripts\Activate.ps1
 python -m pip install -r .\01_central_server\requirements.txt
 python -m pip check
 # First-time semantic model provisioning ONLY (network/cache preparation):
@@ -40,8 +40,8 @@ python -m uvicorn main:app --app-dir .\01_central_server --host 127.0.0.1 --port
 # Health: https://localhost:8000/health
 
 # === Vision -- port 8001 ===
-if (-not (Test-Path .\02_vision_service\venv-audit-handover\Scripts\python.exe)) { python -m venv .\02_vision_service\venv-audit-handover }
-& .\02_vision_service\venv-audit-handover\Scripts\Activate.ps1
+if (-not (Test-Path .\02_vision_service\venv\Scripts\python.exe)) { python -m venv .\02_vision_service\venv }
+& .\02_vision_service\venv\Scripts\Activate.ps1
 python -m pip install -r .\02_vision_service\requirements.txt
 python -m pip check
 # Use the repository's existing YOLO weights; do not download into the root.
@@ -52,8 +52,8 @@ python -m uvicorn vision_service.app:app --app-dir .\02_vision_service --host 12
 # DeepFace/Keras are optional and excluded from the required manifest.
 
 # === Audio -- port 8002 ===
-if (-not (Test-Path .\03_audio_service\venv-audit-handover\Scripts\python.exe)) { python -m venv .\03_audio_service\venv-audit-handover }
-& .\03_audio_service\venv-audit-handover\Scripts\Activate.ps1
+if (-not (Test-Path .\03_audio_service\venv\Scripts\python.exe)) { python -m venv .\03_audio_service\venv }
+& .\03_audio_service\venv\Scripts\Activate.ps1
 python -m pip install -r .\03_audio_service\requirements.txt
 python -m pip check
 $tls = python -c "import json; from dotenv import load_dotenv; load_dotenv('.env'); from config.ssl_config import get_tls_config; t=get_tls_config(); t.validate(); assert t.enabled and not t.plaintext_transition; print(json.dumps({'cert':str(t.cert_file),'key':str(t.key_file)}))" | ConvertFrom-Json
@@ -61,8 +61,8 @@ python -m uvicorn main:app --app-dir .\03_audio_service --host 127.0.0.1 --port 
 # Health: https://localhost:8002/health
 
 # === TTS -- port 8003 ===
-if (-not (Test-Path .\04_tts_service\venv-audit-handover\Scripts\python.exe)) { python -m venv .\04_tts_service\venv-audit-handover }
-& .\04_tts_service\venv-audit-handover\Scripts\Activate.ps1
+if (-not (Test-Path .\04_tts_service\venv\Scripts\python.exe)) { python -m venv .\04_tts_service\venv }
+& .\04_tts_service\venv\Scripts\Activate.ps1
 python -m pip install -r .\04_tts_service\requirements.txt
 python -m pip check
 $tls = python -c "import json; from dotenv import load_dotenv; load_dotenv('.env'); from config.ssl_config import get_tls_config; t=get_tls_config(); t.validate(); assert t.enabled and not t.plaintext_transition; print(json.dumps({'cert':str(t.cert_file),'key':str(t.key_file)}))" | ConvertFrom-Json
@@ -71,8 +71,8 @@ python -m uvicorn tts_service.app:app --app-dir .\04_tts_service --host 127.0.0.
 # Install configured Piper voice weights separately before speech testing.
 
 # === TeachMe -- port 8004 ===
-if (-not (Test-Path .\05_teachme_service\venv-audit-handover\Scripts\python.exe)) { python -m venv .\05_teachme_service\venv-audit-handover }
-& .\05_teachme_service\venv-audit-handover\Scripts\Activate.ps1
+if (-not (Test-Path .\05_teachme_service\venv\Scripts\python.exe)) { python -m venv .\05_teachme_service\venv }
+& .\05_teachme_service\venv\Scripts\Activate.ps1
 python -m pip install -r .\05_teachme_service\requirements.txt
 python -m pip check
 python -c "import sys; from pathlib import Path; from dotenv import load_dotenv; load_dotenv('.env'); sys.path.insert(0, '05_teachme_service'); from teachme_service.config import storage_config; from teachme_service.sqlite_store import initialize; initialize(Path(storage_config.STORAGE_FILE).with_suffix('.sqlite3'))"
@@ -84,8 +84,8 @@ python -m uvicorn teachme_service.app:app --app-dir .\05_teachme_service --host 
 # A missing artifact reports "unavailable"; provision MiniLM as above to fix it.
 
 # === Enrollment -- port 8005 ===
-if (-not (Test-Path .\06_enrollment_service\venv-audit-handover\Scripts\python.exe)) { python -m venv .\06_enrollment_service\venv-audit-handover }
-& .\06_enrollment_service\venv-audit-handover\Scripts\Activate.ps1
+if (-not (Test-Path .\06_enrollment_service\venv\Scripts\python.exe)) { python -m venv .\06_enrollment_service\venv }
+& .\06_enrollment_service\venv\Scripts\Activate.ps1
 python -m pip install -r .\06_enrollment_service\requirements.txt
 python -m pip check
 $tls = python -c "import json; from dotenv import load_dotenv; load_dotenv('.env'); from config.ssl_config import get_tls_config; t=get_tls_config(); t.validate(); assert t.enabled and not t.plaintext_transition; print(json.dumps({'cert':str(t.cert_file),'key':str(t.key_file)}))" | ConvertFrom-Json
@@ -94,8 +94,8 @@ python -m uvicorn app.main:app --app-dir .\06_enrollment_service --host 127.0.0.
 # Start Central, Vision, and Audio before testing dependent enrollment flows.
 
 # === LLM -- port 8006 ===
-if (-not (Test-Path .\07_llm_service\venv-audit-handover\Scripts\python.exe)) { python -m venv .\07_llm_service\venv-audit-handover }
-& .\07_llm_service\venv-audit-handover\Scripts\Activate.ps1
+if (-not (Test-Path .\07_llm_service\venv\Scripts\python.exe)) { python -m venv .\07_llm_service\venv }
+& .\07_llm_service\venv\Scripts\Activate.ps1
 python -m pip install -r .\07_llm_service\requirements.txt
 python -m pip check
 $tls = python -c "import json; from dotenv import load_dotenv; load_dotenv('.env'); from config.ssl_config import get_tls_config; t=get_tls_config(); t.validate(); assert t.enabled and not t.plaintext_transition; print(json.dumps({'cert':str(t.cert_file),'key':str(t.key_file)}))" | ConvertFrom-Json
@@ -104,7 +104,7 @@ python -m uvicorn main:app --app-dir .\07_llm_service --host 127.0.0.1 --port 80
 # Real OpenRouter credit/key provisioning is an operator action; never fake success.
 
 # === All-seven verification -- additional terminal at repository root ===
-& .\01_central_server\venv-audit-handover\Scripts\Activate.ps1
+& .\01_central_server\venv\Scripts\Activate.ps1
 python .\scripts\health_check_all.py
 # Expected: ALL SERVICES RESPONSIVE (7/7), HTTP 200 healthy or honestly degraded.
 # Service logs include correlation IDs and latency; provider/hardware readiness

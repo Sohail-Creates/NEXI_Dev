@@ -1,84 +1,12 @@
+NEXI SERVICE COMMANDS — COMPATIBILITY POINTER
 
-================================================================================
-NEXI ROBOT - COMPLETE SERVICE STARTUP SEQUENCE 
-================================================================================
+The authoritative Windows PowerShell startup guide is run.txt at the repository
+root. It uses one isolated `venv` per service, CA-verified HTTPS, the current
+authoritative ASGI entrypoints, and the real health endpoints.
 
-PREREQUISITES:
-1. Navigate to the NEXI_ROBO project root directory
-2. Create and activate virtual environment: python -m venv venv
-3. Activate venv: .\venv\Scripts\Activate.ps1
-4. Install dependencies: pip install -r requirements.txt
+Do not use historical shared-venv, direct `python main.py`, plaintext HTTP, or
+`test_nexi_system_enhanced.py` instructions. That harness is retained only as a
+design-reference artifact and is excluded from the protected regression gate.
 
-Start the services in this order for proper initialization:
-
-================================================================================
-SERVICE 1: CENTRAL SERVER (Port 8000)
-================================================================================
-Open PowerShell Terminal 6, navigate to project root, activate venv, then run:
-
-cd 01_central_server
-python main.py
-
-
-================================================================================
-SERVICE 2: AUDIO SERVICE (Port 8002)
-================================================================================
-Open PowerShell Terminal 1, navigate to project root, activate venv, then run:
-
-python 03_audio_service/main.py
-
-
-================================================================================
-SERVICE 3: VISION SERVICE (Port 8001)
-================================================================================
-Open PowerShell Terminal 2, navigate to project root, activate venv, then run:
-
-python 02_vision_service/main.py
-
-
-================================================================================
-SERVICE 4: TTS SERVICE (Port 8003)
-================================================================================
-Open PowerShell Terminal 3, navigate to project root, activate venv, then run:
-
-python 04_tts_service/main.py
-
-
-================================================================================
-SERVICE 5: ENROLLMENT SERVICE (Port 8005)
-================================================================================
-Open PowerShell Terminal 4, navigate to project root, activate venv, then run:
-
-python 06_enrollment_service/app/main.py
-
-
-================================================================================
-SERVICE 6: LLM SERVICE (Port 8006)
-================================================================================
-Open PowerShell Terminal 5, navigate to project root, activate venv, then run:
-
-cd 07_llm_service
-python main.py
-
-
-================================================================================
-SERVICE 7: TeachMe SERVICE (Port 8004)
-================================================================================
-Open PowerShell Terminal 7, navigate to project root, activate venv, then run:
-
-python 05_teachme_service/main.py
-
-
-================================================================================
-RUNNING TESTS (After all services are started)
-================================================================================
-Open a NEW PowerShell Terminal, navigate to project root, activate venv, then run:
-
-python test_nexi_system_enhanced.py
-
-
-================================================================================
-Human like VOICE MODELS(Alternative speakers if current speaker speech not like)
-================================================================================
-English:  en-US-AvaNeural, en-US-BrianMultilingualNeural
-Urdu:     ur-PK-UzmaNeural, ur-PK-AsadNeural
+Current protected test commands and architecture are documented in README.md and
+ARCHITECTURE.md.

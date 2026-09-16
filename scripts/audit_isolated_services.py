@@ -182,7 +182,7 @@ def checked(command: list[str], environment: dict[str, str]) -> str:
     return "".join(output).strip()
 
 
-def audit(service: tuple, venv_name: str, directory: Path) -> dict:
+def audit(service: tuple, venv_name: str, directory: Path, *, reuse_existing: bool = False) -> dict:
     name, app_dir, target, health_path, port = service
     manifest = ROOT / app_dir / "requirements.txt"
     row = {"service": name, "install_exit_code": "NOT RUN",
@@ -196,8 +196,10 @@ def audit(service: tuple, venv_name: str, directory: Path) -> dict:
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", port))
         venv = ROOT / app_dir / venv_name
-        if venv.exists():
+        if venv.exists() and not reuse_existing:
             raise RuntimeError(f"fresh environment required; choose another --venv-name: {venv}")
+        if reuse_existing and not (venv / "Scripts" / "python.exe").is_file():
+            raise RuntimeError(f"reusable environment is missing its interpreter: {venv}")
         tls = generate_local_certificates(directory / name / "tls")
         environment = os.environ.copy()
         environment.update({
@@ -223,7 +225,10 @@ def audit(service: tuple, venv_name: str, directory: Path) -> dict:
             "MPLCONFIGDIR": str(directory / name / "matplotlib"),
             "OBJECT_DETECTION_MODEL": str(ROOT / "02_vision_service" / "yolov8n"),
         })
-        checked([sys.executable, "-m", "venv", str(venv)], environment)
+        if reuse_existing:
+            print(f"REUSE_EXISTING_VENV={venv}", flush=True)
+        else:
+            checked([sys.executable, "-m", "venv", str(venv)], environment)
         python = str(venv / "Scripts" / "python.exe")
         print(f"ISOLATED_INTERPRETER={python}", flush=True)
         try:
@@ -305,12 +310,18 @@ def main() -> int:
     parser.add_argument("--venv-name", default="venv-audit-01")
     parser.add_argument("--imports", action="store_true", help="read-only entrypoint import graph")
     parser.add_argument("--regression", action="store_true", help="unchanged tests, isolated server interpreters")
+    parser.add_argument(
+        "--reuse-existing",
+        action="store_true",
+        help="verify an existing service venv instead of creating a new audit environment",
+    )
     args = parser.parse_args()
     if args.imports:
         import_inventory()
         return 0
-    if not args.venv_name.startswith("venv-audit-") or Path(args.venv_name).name != args.venv_name:
-        parser.error("--venv-name must be a simple directory name starting with venv-audit-")
+    valid_venv_name = args.venv_name == "venv" or args.venv_name.startswith("venv-audit-")
+    if not valid_venv_name or Path(args.venv_name).name != args.venv_name:
+        parser.error("--venv-name must be 'venv' or a simple directory name starting with venv-audit-")
     if args.regression:
         return isolated_regression(args.venv_name)
     directory = Path(tempfile.mkdtemp(prefix="nexi-isolated-audit-"))
@@ -318,7 +329,7 @@ def main() -> int:
     try:
         for service in SERVICES:
             if not args.service or args.service == service[0]:
-                audit(service, args.venv_name, directory)
+                audit(service, args.venv_name, directory, reuse_existing=args.reuse_existing)
     except Exception as exc:
         print(f"AUDIT_STOP={exc}", flush=True)
         return 1
