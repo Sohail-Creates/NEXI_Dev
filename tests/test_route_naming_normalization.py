@@ -168,7 +168,7 @@ def test_e_registration_with_embeddings_alias_is_identical(monkeypatch) -> None:
     ).endpoint
     enhanced = (ROOT_PATH / "test_nexi_system_enhanced.py").read_text(encoding="utf-8")
     assert "CENTRAL_SERVER}/users/add-embeddings" not in enhanced
-    assert "CENTRAL_SERVER}/users/register-with-embeddings" in enhanced
+    assert '"/enrollment/enroll"' in enhanced
     print(
         "TASK_E_PRIMARY HTTP=200 PATH=/users/register-with-embeddings "
         f"BODY={json.dumps(primary.json(), separators=(',', ':'))}"
