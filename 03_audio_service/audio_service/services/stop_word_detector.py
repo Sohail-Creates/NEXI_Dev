@@ -20,6 +20,7 @@ from datetime import datetime
 import pyaudio
 
 from audio_service.services.base_detector import PorcupineDetectorBase
+from audio_service.device_selection import resolve_pyaudio_input
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,7 @@ class StopWordDetector(PorcupineDetectorBase):
                 return
             
             self.pyaudio_instance = pyaudio.PyAudio()
+            input_device_index = resolve_pyaudio_input(self.pyaudio_instance)
             
             logger.debug(
                 f"Opening audio stream: "
@@ -109,6 +111,7 @@ class StopWordDetector(PorcupineDetectorBase):
                 channels=1,
                 rate=self.porcupine_instance.sample_rate,
                 input=True,
+                input_device_index=input_device_index,
                 frames_per_buffer=self.porcupine_instance.frame_length,
                 exception_on_overflow=False
             )

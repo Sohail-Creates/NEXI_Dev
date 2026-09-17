@@ -150,31 +150,45 @@ def test_e2e_enroll_verify_grounded_answer_persist_and_sync_eligible(monkeypatch
             f"trusted_user={teachme.search_users[0]} response={answer['response']!r}"
         )
 
-        stored = central.post(
-            f"/users/{user_id}/conversations",
-            headers=user_headers,
-            json={
-                "user_message": "Where is the NEXI charging dock?",
-                "assistant_response": answer["response"],
-                "language": "en",
-            },
-        )
-        assert stored.status_code == 200, stored.text
         durable = central.get(f"/users/{user_id}/conversations", headers=user_headers)
         assert durable.status_code == 200 and durable.json()["count"] == 1, durable.text
         record = durable.json()["conversations"][0]
         assert record["assistant_response"] == answer["response"]
+        assert record["metadata"] == {"source": "teachme_grounded", "automatic": True}
         print(
-            f"E2E_STAGE_5_DURABILITY POST=200 GET=200 conversation_id={record['conversation_id']} "
-            f"count={durable.json()['count']}"
+            f"E2E_STAGE_5_DURABILITY auto_persisted=True GET=200 "
+            f"conversation_id={record['conversation_id']} count={durable.json()['count']}"
+        )
+
+        no_match = _MemoryTeachMe()
+        monkeypatch.setattr(restricted_rag, "get_teachme_connector", lambda: no_match)
+        fallback = central.post(
+            "/api/v1/rag/query",
+            headers=user_headers,
+            json={"query": "What is the orbital period of Neptune?"},
+        )
+        assert fallback.status_code == 200, fallback.text
+        assert fallback.json() == {
+            "success": True,
+            "response": "I don't know this yet. Please teach me.",
+            "source": "no_match",
+        }
+        after_fallback = central.get(f"/users/{user_id}/conversations", headers=user_headers)
+        assert after_fallback.status_code == 200 and after_fallback.json()["count"] == 2
+        newest = after_fallback.json()["conversations"][0]
+        assert newest["user_message"] == "What is the orbital period of Neptune?"
+        assert newest["metadata"] == {"source": "no_match", "automatic": True}
+        print(
+            f"E2E_STAGE_5B_NO_MATCH auto_persisted=True GET=200 "
+            f"conversation_id={newest['conversation_id']} count={after_fallback.json()['count']}"
         )
 
         sync = central.get("/sync/status", headers=service_headers)
         assert sync.status_code == 200, sync.text
-        assert sync.json()["pending_records"] == 1
+        assert sync.json()["pending_records"] == 2
         print(
             f"E2E_STAGE_6_SYNC_ELIGIBILITY HTTP=200 pending_records={sync.json()['pending_records']} "
-            f"synced=0 conversation_id={record['conversation_id']}"
+            f"synced=0 conversation_ids={record['conversation_id']},{newest['conversation_id']}"
         )
 
     print("E2E_RESULT PASS stages=6 physical_hardware=False synthesized_speech=True")

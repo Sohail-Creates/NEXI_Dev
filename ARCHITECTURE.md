@@ -35,6 +35,10 @@ service APIs are authenticated contracts, not alternate policy gateways.
 7. Provider errors remain errors. Output must pass direct containment/similarity
    grounding or Central returns the safe teach-first response and logs a distinct
    grounding failure.
+8. Completed ordinary-Q&A outcomes (`teachme_grounded`, `no_match`, and the safe
+   `grounding_failure` fallback) are automatically written through Central's
+   durable conversation path and enter the cloud-sync outbox. Basic commands,
+   rejected non-English input, and provider failures are not conversation records.
 
 TeachMe owns retrieval. There is no second vector database; FAISS is an optional
 accelerator over the same store, with linear retrieval supported. TeachMe warms
@@ -53,6 +57,16 @@ The authority provides grant/release, queue cancellation, fail-closed liveness,
 watchdog force-release, and reassignment. `CALL_ACTIVE` is state attached to a
 `VIDEO_CALL` camera lease, not a priority. TeachMe focus broadcast is cooperative
 service yielding, not a second hardware lease mechanism.
+
+While `CALL_ACTIVE` owns the camera lease, Vision's normal background health
+probe is intentionally denied a second lease and may report `camera=unavailable`.
+This means "unavailable to ordinary Vision work while reserved for the call," not
+that the call lease leaked. Ending the call releases the lease and restores normal
+priority arbitration.
+
+Vision health probes request a provisional background lease and must release it
+when reservation acknowledgement fails. A held non-call Vision lease alongside
+`camera=unavailable` is therefore a fault, not the intended call-reservation case.
 
 ## Trust, transport, and errors
 
@@ -97,6 +111,10 @@ service yielding, not a second hardware lease mechanism.
 
 The protected baseline is 62 tests across unit, contract, integration,
 resilience, and E2E layers. Liveness means HTTP 200 with an honest healthy or
-degraded body. Physical camera/microphone behavior, DeepFace, Porcupine account
-behavior, Piper Jenny weights, OpenRouter paid generation, production CA/secret
-infrastructure, and a real cloud vendor remain deployment-specific work.
+degraded body. On the validated Windows host, Vision uses the system-default
+camera (or `VISION_CAMERA_DEVICE`) with YOLO and DeepFace, and TTS uses the
+configured Jenny Piper model. Audio uses the system-default input (or
+`AUDIO_INPUT_DEVICE`), but the validated host's microphone driver does not
+support the 16 kHz capture format required by the conversation path. Porcupine
+account activation/custom keyword provisioning, production CA/secret
+infrastructure, and a real cloud vendor remain deployment/operator-specific.

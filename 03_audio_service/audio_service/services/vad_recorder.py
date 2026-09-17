@@ -19,6 +19,7 @@ from typing import Optional, Dict
 
 from audio_service.utils.vad import VoiceActivityDetector
 from audio_service.config import VAD_RECORDER_CONFIG
+from audio_service.device_selection import resolve_pyaudio_input
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +113,7 @@ class VADRecorder:
         try:
             # Create PyAudio instance
             p = pyaudio.PyAudio()
+            input_device_index = resolve_pyaudio_input(p)
             
             # Open audio stream
             logger.debug(f"Opening audio stream: sr={self.sample_rate}, chunk={self.chunk_size}")
@@ -120,6 +122,7 @@ class VADRecorder:
                 channels=self.channels,
                 rate=self.sample_rate,
                 input=True,
+                input_device_index=input_device_index,
                 frames_per_buffer=self.chunk_size
             )
             

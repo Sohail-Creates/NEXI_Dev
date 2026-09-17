@@ -401,7 +401,45 @@ def test_phase2_resource_authority_regression() -> None:
     finally:
         if sleeper.poll() is None:
             sleeper.terminate()
-    print("PHASE2_RESOURCE_RESULT passed=5 failed=0")
+
+    import requests as requests_library
+    from unittest.mock import patch
+    from vision_service.services.camera_client import CameraResourceClient
+
+    class Response:
+        def __init__(self, status_code, body):
+            self.status_code = status_code
+            self._body = body
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise requests_library.HTTPError(f"HTTP {self.status_code}")
+
+        def json(self):
+            return self._body
+
+    camera_calls = []
+
+    def camera_post(url, **_kwargs):
+        camera_calls.append(url)
+        if url.endswith("/resources/request"):
+            return Response(200, {"lease_id": "provisional-lease", "state": "reserved"})
+        if "/resources/acknowledge/" in url:
+            raise requests_library.ConnectionError("forced acknowledge failure")
+        if url.endswith("/resources/release/provisional-lease"):
+            return Response(200, {"success": True})
+        raise AssertionError(url)
+
+    camera_client = CameraResourceClient("https://localhost:8000", "vision-test")
+    with patch("vision_service.services.camera_client.requests.post", side_effect=camera_post):
+        assert camera_client.request_camera(timeout=1) is False
+    assert camera_client.lease_id is None
+    assert camera_calls[-1].endswith("/resources/release/provisional-lease")
+    print(
+        "PROVISIONAL_LEASE_CLEANUP PASS "
+        f"granted=False lease_id={camera_client.lease_id} release_called=True"
+    )
+    print("PHASE2_RESOURCE_RESULT passed=6 failed=0")
 
 
 def test_phase2_persistence_regression(tmp_path) -> None:
@@ -621,7 +659,7 @@ def test_phase2_protected_llm_contract() -> None:
     print("PHASE2_LLM_CONTRACT_RESULT=PASS model_info=preserved format=preserved")
 
 
-def test_shared_error_handler_covers_rate_limit_and_unexpected_failure() -> None:
+def test_shared_error_handler_covers_rate_limit_unexpected_and_vision_model_failure(monkeypatch) -> None:
     from fastapi import FastAPI, HTTPException
     from shared.api_errors import install_error_handlers
 
@@ -646,6 +684,34 @@ def test_shared_error_handler_covers_rate_limit_and_unexpected_failure() -> None
     assert "forced fixture failure" not in broken_response.text
     print(f"ERROR_429 HTTP=429 body={limited_body}")
     print(f"ERROR_500 HTTP=500 body={broken_body} internal_detail_leaked=False")
+
+    vision_dir = ROOT / "02_vision_service"
+    if str(vision_dir) not in sys.path:
+        sys.path.insert(0, str(vision_dir))
+    from vision_service.routes import detection
+
+    monkeypatch.setattr(
+        detection,
+        "require_deepface",
+        lambda: (_ for _ in ()).throw(ModuleNotFoundError("No module named 'deepface'")),
+    )
+    detection.set_resource_pool(object())
+    vision = FastAPI()
+    vision.include_router(detection.router, prefix="/api/v1")
+    install_error_handlers(vision, "vision-fixture")
+    with TestClient(vision, raise_server_exceptions=False) as client:
+        uploaded = client.post(
+            "/api/v1/detect/faces/upload",
+            files={"file": ("face.jpg", b"not-read-before-runtime-check", "image/jpeg")},
+        )
+        complete = client.post("/api/v1/analyze/complete")
+    uploaded_body = _assert_envelope(uploaded)
+    complete_body = _assert_envelope(complete)
+    assert uploaded.status_code == complete.status_code == 503
+    assert uploaded_body["error"]["code"] == complete_body["error"]["code"] == "FACE_MODEL_UNAVAILABLE"
+    assert uploaded_body["error"]["message"] == complete_body["error"]["message"] == "No module named 'deepface'"
+    print(f"VISION_UPLOAD_DEEPFACE HTTP=503 body={uploaded_body}")
+    print(f"VISION_COMPLETE_DEEPFACE HTTP=503 body={complete_body}")
 
 
 if __name__ == "__main__":

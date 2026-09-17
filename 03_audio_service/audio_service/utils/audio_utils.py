@@ -19,6 +19,7 @@ from audio_service.config import (
     DATA_DIR,
     TIMESTAMP_FORMAT
 )
+from audio_service.device_selection import resolve_sounddevice_input
 
 logger = logging.getLogger(__name__)
 
@@ -117,13 +118,21 @@ def record_audio(
             f"Starting audio recording: duration={duration}s, "
             f"sample_rate={sample_rate}Hz, channels={channels}"
         )
+        input_device = resolve_sounddevice_input()
+        logger.info(
+            "Using audio input index=%s name=%s hostapi=%s",
+            input_device.index,
+            input_device.name,
+            input_device.hostapi,
+        )
         
         # Record audio from microphone
         audio_data = sd.rec(
             int(duration * sample_rate),
             samplerate=sample_rate,
             channels=channels,
-            dtype=AUDIO_CONFIG["dtype"]
+            dtype=AUDIO_CONFIG["dtype"],
+            device=input_device.index,
         )
         
         # Wait for recording to complete

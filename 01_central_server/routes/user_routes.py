@@ -79,7 +79,7 @@ async def _persist_users(app_state, request: Request, immediate: bool = False):
 async def create_voice_session(file: UploadFile = File(...)):
     """Issue a session only through Audio's existing speaker matcher."""
     result = await _audio_verification_client.verify_speaker(
-        speaker_id="candidate",
+        user_id="candidate",
         audio_file_bytes=await file.read(),
         filename=file.filename or "verification.wav",
     )

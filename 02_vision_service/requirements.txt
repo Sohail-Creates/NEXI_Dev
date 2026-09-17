@@ -3,17 +3,22 @@ uvicorn[standard]==0.24.0
 pydantic==2.12.5
 pydantic-settings==2.13.0
 cryptography==46.0.5
-python-dotenv==1.0.0
+python-dotenv==1.2.3
 python-multipart==0.0.22
 httpx==0.25.0
 anyio==4.15.1
 # Computer Vision & Deep Learning
 opencv-python==4.8.0.76
+cv2-enumerate-cameras==1.3.3
 Pillow==10.0.1
 
 # Deep Learning & Neural Networks
 torch==2.0.1
 torchvision==0.15.2
+tensorflow==2.20.0
+tf-keras==2.20.1
+keras==3.15.1
+deepface==0.0.98
 
 # Object Detection
 ultralytics==8.0.196
@@ -22,11 +27,3 @@ scikit-image==0.21.0
 # Utils
 numpy==1.26.4
 scipy==1.11.2
-
-# OPTIONAL face embeddings: excluded from normal installation. The application
-# catches missing DeepFace during model startup and reports face_model unavailable.
-# Historical optional pins, not a verified compatible extra; install only in a
-# separately validated face-model environment. No optional dependency is installed
-# by `pip install -r requirements.txt`.
-# deepface==0.0.79
-# keras==2.13.1

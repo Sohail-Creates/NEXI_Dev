@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 import logging
@@ -15,6 +16,7 @@ from langdetect import DetectorFactory, LangDetectException, detect
 from pydantic import BaseModel, ConfigDict, Field
 
 from basic_commands import classify_basic_command
+from conversations_persistence import add_conversation
 from shared.clients.llm_client import LLMServiceClient
 from shared.semantic_embeddings import knowledge_text
 from teachme_connector import get_teachme_connector
@@ -165,8 +167,26 @@ _llm_client = LLMServiceClient()
 async def restricted_query(request: RAGQueryRequest, http_request: Request):
     try:
         claims = require_session_claims(http_request)
+        user_id = str(claims["sub"])
         pipeline = RestrictedRAGPipeline(get_teachme_connector(), _llm_client)
-        result = await pipeline.answer(request.query, user_id=str(claims["sub"]))
+        result = await pipeline.answer(request.query, user_id=user_id)
+        if result.source in {"teachme_grounded", "no_match", "grounding_failure"}:
+            persisted = await asyncio.to_thread(
+                add_conversation,
+                user_id=user_id,
+                user_message=request.query,
+                assistant_response=result.response,
+                language="en",
+                metadata={"source": result.source, "automatic": True},
+            )
+            if not persisted:
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "code": "CONVERSATION_PERSISTENCE_FAILED",
+                        "message": "RAG response could not be stored",
+                    },
+                )
         return {"success": True, "response": result.response, "source": result.source}
     except NonEnglishQueryError as exc:
         raise HTTPException(status_code=422, detail={"code": "english_only", "message": str(exc)}) from exc

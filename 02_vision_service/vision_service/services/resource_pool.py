@@ -12,6 +12,7 @@ from typing import Optional
 from contextlib import contextmanager
 
 from .camera_client import get_camera_client
+from .camera_devices import enumerate_camera_devices, open_camera, resolve_camera_device
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,8 @@ class ResourcePool:
     def __init__(self, camera_timeout: int = 10,
                  central_server_url: str = "https://localhost:8000",
                  enable_object_detection: bool = True, object_model_name: str = "yolov8n",
-                 release_watchdog_timeout: float = 3.0):
+                 release_watchdog_timeout: float = 3.0,
+                 camera_device: str | int | None = None):
         """
         Initialize resource pool
         
@@ -56,6 +58,7 @@ class ResourcePool:
         self._release_watchdog_timeout = release_watchdog_timeout
         self.enable_object_detection = enable_object_detection
         self.object_model_name = object_model_name
+        self.camera_device_selector = camera_device
         
         # Initialize camera resource client
         self._camera_client = get_camera_client(central_server_url, "vision_service")
@@ -80,9 +83,19 @@ class ResourcePool:
             stop = threading.Event()
             watcher = None
             try:
-                self._camera = cv2.VideoCapture(0)
+                selected_device = resolve_camera_device(self.camera_device_selector)
+                logger.info(
+                    "Opening camera index=%s name=%s backend=%s",
+                    selected_device.index,
+                    selected_device.name,
+                    cv2.videoio_registry.getBackendName(selected_device.backend),
+                )
+                self._camera = open_camera(selected_device)
                 if not self._camera.isOpened():
-                    raise RuntimeError("Cannot access camera - verify device connection")
+                    raise RuntimeError(
+                        f"Cannot access camera {selected_device.name!r} "
+                        f"(index {selected_device.index}) - verify device connection and permission"
+                    )
                 if owns_lease:
                     watcher = threading.Thread(target=self._watch_lease,
                         args=(self._camera_client.lease_id, stop, self._camera), daemon=True)
@@ -152,11 +165,22 @@ class ResourcePool:
     def is_camera_available(self) -> bool:
         """Check if camera is available and working"""
         try:
-            with self.get_camera(timeout=2):
+            with self.get_camera(timeout=self._camera_timeout):
                 return True
         except Exception as e:
             logger.warning(f"Camera availability check failed: {e}")
             return False
+
+    def list_camera_devices(self) -> list[dict]:
+        """Expose the physical choices without acquiring a long-lived lease."""
+        return [
+            {
+                "index": device.index,
+                "name": device.name,
+                "backend": cv2.videoio_registry.getBackendName(device.backend),
+            }
+            for device in enumerate_camera_devices()
+        ]
     
     def get_object_detector(self):
         """
@@ -178,13 +202,21 @@ class ResourcePool:
                 from .object_detector import ObjectDetector
                 from pathlib import Path
                 
-                # Try to load from models directory first
-                models_dir = Path(__file__).parent.parent.parent / "models"
-                model_path = models_dir / f"{self.object_model_name}.pt"
+                # An explicit deployment path wins.  Bare model names retain the
+                # existing service-local lookup and, if absent, Ultralytics'
+                # standard model-name handling.
+                configured_model = Path(self.object_model_name).expanduser()
+                if configured_model.is_file():
+                    model_path = configured_model.resolve()
+                    model_name = configured_model.stem
+                else:
+                    models_dir = Path(__file__).parent.parent.parent / "models"
+                    model_path = models_dir / f"{self.object_model_name}.pt"
+                    model_name = self.object_model_name
                 
                 logger.info(f"Initializing YOLO object detector ({self.object_model_name})...")
                 self._object_detector = ObjectDetector(
-                    model_name=self.object_model_name,
+                    model_name=model_name,
                     model_path=str(model_path) if model_path.exists() else None
                 )
                 

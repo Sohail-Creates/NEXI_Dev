@@ -14,6 +14,13 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 
+def require_deepface():
+    """Return the optional face runtime or preserve its actionable import error."""
+    from deepface import DeepFace
+
+    return DeepFace
+
+
 def load_model_with_retry(
     model_name: str = "Facenet",
     max_retries: int = 3,
@@ -31,7 +38,7 @@ def load_model_with_retry(
     Returns:
         True if model loaded successfully, False otherwise
     """
-    from deepface import DeepFace
+    DeepFace = require_deepface()
     
     for attempt in range(max_retries):
         try:
@@ -91,7 +98,7 @@ def process_face(
     Returns:
         Dictionary with face data and embedding
     """
-    from deepface import DeepFace
+    DeepFace = require_deepface()
     
     try:
         # Extract bounding box
@@ -147,7 +154,7 @@ def detect_faces_deepface(
     Returns:
         List of face objects from DeepFace.extract_faces()
     """
-    from deepface import DeepFace
+    DeepFace = require_deepface()
     
     try:
         logger.info(f"Detecting faces with {detector_backend} backend...")

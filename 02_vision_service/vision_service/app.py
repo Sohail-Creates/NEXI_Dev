@@ -8,6 +8,10 @@ import logging
 import sys
 from pathlib import Path
 
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(errors="backslashreplace")
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from shared.security import allowed_origins, InternalRouteAuthMiddleware
@@ -69,7 +73,8 @@ async def lifespan(app: FastAPI):
             camera_timeout=Config.CAMERA_TIMEOUT,
             central_server_url=Config.CENTRAL_SERVER_URL,
             enable_object_detection=Config.ENABLE_OBJECT_DETECTION,
-            object_model_name=Config.OBJECT_DETECTION_MODEL
+            object_model_name=Config.OBJECT_DETECTION_MODEL,
+            camera_device=Config.CAMERA_DEVICE,
         )
         logger.info(" Resource pool initialized with Central Server camera management")
         

@@ -106,8 +106,14 @@ async def test_j_new_central_route_wraps_existing_audio_client(monkeypatch):
 
     class AudioFixture:
         verified = True
+        calls = []
 
-        async def verify_speaker(self, **_kwargs):
+        async def verify_speaker(self, audio_file_bytes, filename, user_id):
+            self.calls.append({
+                "audio_file_bytes": audio_file_bytes,
+                "filename": filename,
+                "user_id": user_id,
+            })
             if self.verified:
                 return ServiceCallResult(True, {"verified": True, "user_id": "user-a", "access_token": _token("user-a"), "token_type": "bearer", "expires_in": 1800})
             return ServiceCallResult(True, {"verified": False, "user_id": "unknown", "access_token": None})
@@ -122,7 +128,12 @@ async def test_j_new_central_route_wraps_existing_audio_client(monkeypatch):
         rejected = client.post("/users/session/voice", files={"file": ("other.wav", b"RIFF-other", "audio/wav")})
     print(f"J_ROUTE_MATCH status={accepted.status_code} body_keys={sorted(accepted.json())}")
     print(f"J_ROUTE_NO_MATCH status={rejected.status_code} body={rejected.json()}")
+    print(f"J_ROUTE_AUDIO_CONTRACT calls={fixture.calls}")
     assert accepted.status_code == 200 and rejected.status_code == 401
+    assert fixture.calls == [
+        {"audio_file_bytes": b"RIFF-synth", "filename": "speech.wav", "user_id": "candidate"},
+        {"audio_file_bytes": b"RIFF-other", "filename": "other.wav", "user_id": "candidate"},
+    ]
 
 
 def test_c_claim_ownership_no_token_cross_user_own_and_expired():

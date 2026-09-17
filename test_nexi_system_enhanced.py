@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
+import platform
 import sys
 import time
 from typing import Any, Iterable, Mapping
@@ -292,10 +293,9 @@ class Sprint2Console:
     def voice_login(self, voice: Path) -> LiveResponse:
         with voice.open("rb") as handle:
             response = self.client.request(
-                "audio",
+                "central",
                 "POST",
-                "/api/v1/verify-speaker",
-                internal=True,
+                "/users/session/voice",
                 files={"file": (voice.name, handle, "audio/wav")},
             )
         if isinstance(response.body, Mapping):
@@ -401,6 +401,36 @@ class Sprint2Console:
             print(f"Audio response saved to {output.resolve()}")
         return response
 
+    def manual_voice_fallback(self) -> tuple[LiveResponse, LiveResponse]:
+        """Use spacebar controls while Audio owns recording and lease logic."""
+        _wait_for_spacebar("Press SPACE to start the direct-voice fallback")
+        started = self.client.request(
+            "audio", "POST", "/api/v1/wake-word/start", internal=True
+        )
+        if not started.ok:
+            return started, started
+        try:
+            _wait_for_spacebar("Press SPACE to stop and release the microphone")
+        finally:
+            stopped = self.client.request(
+                "audio", "POST", "/api/v1/wake-word/stop", internal=True
+            )
+        return started, stopped
+
+
+def _wait_for_spacebar(prompt: str) -> None:
+    """Console-only input handling; all application work remains REST-owned."""
+    print(prompt)
+    if platform.system() == "Windows":
+        import msvcrt
+
+        while msvcrt.getwch() != " ":
+            pass
+        print()
+        return
+    while input("Type one space and press Enter: ") != " ":
+        pass
+
 
 MENU = """
 NEXI Sprint 2 live REST console
@@ -420,6 +450,7 @@ NEXI Sprint 2 live REST console
 14  Vision camera object/face analysis
 15  Vision face detection from uploaded image
 16  Synthesize English speech with Jenny
+17  Manual direct-voice fallback (SPACE starts/stops)
  0  Exit
 """
 
@@ -466,6 +497,7 @@ def _interactive(console: Sprint2Console) -> int:
         "16": lambda: console.speak_jenny(
             input("Text: ").strip(), ROOT / "manual-jenny-output.wav"
         ),
+        "17": lambda: console.manual_voice_fallback(),
     }
     while True:
         print(MENU)

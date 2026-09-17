@@ -33,6 +33,7 @@ from audio_service.config import (
     POWER_CONFIG
 )
 from audio_service.services.keyboard_wake_word import KeyboardWakeWordListener
+from audio_service.device_selection import resolve_sounddevice_input
 from audio_service.utils.vad import VoiceActivityDetector
 from audio_service.utils.errors import (
     WakeWordError,
@@ -116,6 +117,16 @@ class WakeWordService:
         self.max_reconnect_attempts = 3
         
         logger.info(f"Wake word service initialized (power_mode={self.power_mode})")
+
+    def _input_device_index(self) -> int:
+        device = resolve_sounddevice_input()
+        logger.info(
+            "Using audio input index=%s name=%s hostapi=%s",
+            device.index,
+            device.name,
+            device.hostapi,
+        )
+        return device.index
     
     def set_power_mode(self, mode: str):
         """
@@ -336,7 +347,8 @@ class WakeWordService:
                     samplerate=sample_rate,
                     channels=1,
                     dtype=np.int16,
-                    blocksize=frame_length
+                    blocksize=frame_length,
+                    device=self._input_device_index(),
                 ) as stream:
                     
                     self.audio_stream = stream
@@ -603,7 +615,7 @@ class WakeWordService:
         speech_frames = 0
         
         try:
-            with sd.InputStream(samplerate=sample_rate, channels=1, dtype='int16', blocksize=frame_length) as stream:
+            with sd.InputStream(samplerate=sample_rate, channels=1, dtype='int16', blocksize=frame_length, device=self._input_device_index()) as stream:
                 logger.info(" Listening for wake word...")
                 
                 while True:
@@ -691,7 +703,7 @@ class WakeWordService:
         speech_frames = 0
         
         try:
-            with sd.InputStream(samplerate=sample_rate, channels=1, dtype='int16', blocksize=frame_length) as stream:
+            with sd.InputStream(samplerate=sample_rate, channels=1, dtype='int16', blocksize=frame_length, device=self._input_device_index()) as stream:
                 logger.info(" Listening for wake word...")
                 
                 while True:
@@ -827,7 +839,8 @@ class WakeWordService:
                 samplerate=sample_rate,
                 channels=1,
                 dtype='int16',
-                blocksize=512
+                blocksize=512,
+                device=self._input_device_index(),
             ) as stream:
                 
                 logger.info("Recording started (will stop on silence)...")

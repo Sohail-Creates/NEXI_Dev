@@ -1,12 +1,56 @@
-NEXI SERVICE COMMANDS — COMPATIBILITY POINTER
+.\venv\Scripts\Activate.ps1
 
-The authoritative Windows PowerShell startup guide is run.txt at the repository
-root. It uses one isolated `venv` per service, CA-verified HTTPS, the current
-authoritative ASGI entrypoints, and the real health endpoints.
+================================
+CENTRAL
+================================
+cd 01_central_server
+.\venv\Scripts\Activate.ps1
+python -m uvicorn main:app --port 8000
 
-Do not use historical shared-venv, direct `python main.py`, plaintext HTTP, or
-`test_nexi_system_enhanced.py` instructions. That harness is retained only as a
-design-reference artifact and is excluded from the protected regression gate.
 
-Current protected test commands and architecture are documented in README.md and
-ARCHITECTURE.md.
+================================
+VISION
+================================
+cd 02_vision_service
+.\venv\Scripts\Activate.ps1
+python -m uvicorn vision_service.app:app --port 8001
+
+
+================================
+AUDIO
+================================
+cd 03_audio_service
+.\venv\Scripts\Activate.ps1
+python -m uvicorn main:app --port 8002
+
+
+================================
+TTS
+================================
+cd 04_tts_service
+.\venv\Scripts\Activate.ps1
+python -m uvicorn tts_service.app:app --port 8003
+
+
+================================
+TEACHME
+================================
+cd 05_teachme_service
+.\venv\Scripts\Activate.ps1
+python -m uvicorn teachme_service.app:app --port 8004
+
+
+================================
+ENROLLMENT
+================================
+cd 06_enrollment_service
+.\venv\Scripts\Activate.ps1
+python -m uvicorn app.main:app --port 8005
+
+
+================================
+LLM
+================================
+cd 07_llm_service
+.\venv\Scripts\Activate.ps1
+python -m uvicorn main:app --port 8006

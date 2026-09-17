@@ -530,8 +530,10 @@ async def sync_speakers_from_central():
         # Fetch all users from Central Server
         try:
             from shared.security import internal_service_headers
+            from config.ssl_config import client_verify
             response = requests.get(
-                f"{central_url}/users/list", headers=internal_service_headers(), timeout=10
+                f"{central_url}/users/list", headers=internal_service_headers(), timeout=10,
+                verify=client_verify(central_url),
             )
             if response.status_code != 200:
                 logger.error(f"Failed to fetch users from Central Server: {response.status_code}")

@@ -19,6 +19,7 @@ from ..services.resource_pool import ResourcePool
 from ..services.face_detector import (
     detect_faces_deepface,
     process_face,
+    require_deepface,
     validate_detector_backend,
     validate_embedding_model
 )
@@ -77,6 +78,7 @@ async def detect_faces_from_camera(
         # Validate parameters
         validate_detector_backend(detector_backend, Config.VALID_BACKENDS)
         validate_embedding_model(model_name, Config.VALID_EMBEDDING_MODELS)
+        require_deepface()
         
         # Get camera and read frame
         with _resource_pool.get_camera(timeout=Config.CAMERA_TIMEOUT) as camera:
@@ -135,6 +137,12 @@ async def detect_faces_from_camera(
         raise HTTPException(status_code=400, detail=str(e)) from e
     except HTTPException:
         raise
+    except ModuleNotFoundError as e:
+        logger.error(f"Face model unavailable: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "FACE_MODEL_UNAVAILABLE", "message": str(e)},
+        ) from e
     except Exception as e:
         logger.error(f"Face detection error: {e}")
         raise HTTPException(status_code=500, detail="Face detection failed") from e
@@ -156,6 +164,7 @@ async def detect_faces_from_upload(
         # Validate parameters
         validate_detector_backend(detector_backend, Config.VALID_BACKENDS)
         validate_embedding_model(model_name, Config.VALID_EMBEDDING_MODELS)
+        require_deepface()
         
         # Read uploaded file
         contents = file.file.read()
@@ -200,6 +209,12 @@ async def detect_faces_from_upload(
             faces=faces_data
         )
     
+    except ModuleNotFoundError as e:
+        logger.error(f"Face model unavailable: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "FACE_MODEL_UNAVAILABLE", "message": str(e)},
+        ) from e
     except Exception as e:
         logger.error(f"Upload processing error: {e}")
         raise HTTPException(status_code=400, detail=f"Upload processing failed: {str(e)}")
@@ -220,6 +235,7 @@ async def complete_analysis(
         # Validate parameters
         validate_detector_backend(detector_backend, Config.VALID_BACKENDS)
         validate_embedding_model(model_name, Config.VALID_EMBEDDING_MODELS)
+        require_deepface()
         
         # Get camera and read frame
         with _resource_pool.get_camera(timeout=Config.CAMERA_TIMEOUT) as camera:
@@ -269,6 +285,12 @@ async def complete_analysis(
                 objects=[DetectedObject(**det) for det in object_results.get("detections", [])]
             )
     
+    except ModuleNotFoundError as e:
+        logger.error(f"Face model unavailable: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "FACE_MODEL_UNAVAILABLE", "message": str(e)},
+        ) from e
     except ValueError as e:
         logger.error(f"Analysis validation error: {e}")
         raise HTTPException(status_code=400, detail=str(e)) from e

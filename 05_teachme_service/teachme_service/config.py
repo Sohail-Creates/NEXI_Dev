@@ -13,15 +13,15 @@ load_dotenv()
 class VisionServiceConfig:
     """Vision Service integration settings"""
     
-    HOST: str = os.getenv("VISION_HOST", "localhost")
+    HOST: str = os.getenv("VISION_HOST", "127.0.0.1")
     PORT: int = int(os.getenv("VISION_PORT", "8001"))
     TIMEOUT: int = int(os.getenv("VISION_TIMEOUT", "30"))
-    HEALTH_CHECK_TIMEOUT: int = int(os.getenv("HEALTH_CHECK_TIMEOUT", "2"))
+    HEALTH_CHECK_TIMEOUT: int = int(os.getenv("HEALTH_CHECK_TIMEOUT", "10"))
     RETRY_COUNT: int = int(os.getenv("VISION_RETRY_COUNT", "2"))
     RETRY_DELAY: int = int(os.getenv("VISION_RETRY_DELAY", "1"))
     
     # Vision API endpoints
-    ANALYZE_ENDPOINT: str = "/analyze/complete"
+    ANALYZE_ENDPOINT: str = "/api/v1/analyze/complete"
     HEALTH_ENDPOINT: str = "/health"
     
     # Vision analysis parameters

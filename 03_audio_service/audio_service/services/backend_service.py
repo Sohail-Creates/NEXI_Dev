@@ -206,7 +206,6 @@ class BackendService:
             response = self.session.get(
                 url,
                 timeout=5.0,  # Short timeout for health check
-                verify=self.verify_ssl
             )
             
             return response.status_code == 200
@@ -275,7 +274,6 @@ class BackendService:
                 url,
                 json=payload,
                 timeout=self.timeout,
-                verify=self.verify_ssl
             )
             
             result = self._handle_response(response)

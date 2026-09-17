@@ -202,6 +202,17 @@ class EnrollmentService:
             registration_result = await self.central_server_client.register_user(user_data)
             user_id = registration_result["user_id"]
             print(f"[Enrollment] [OK] User registered: {user_id}")
+
+            # Central owns the durable biometric record; Audio owns the runtime
+            # verification index. Refresh that existing index before issuing the
+            # session token so a newly enrolled user can immediately log in.
+            sync_result = await self.audio_client.sync_speakers_from_central()
+            if int(sync_result.get("speakers_synced", 0)) < 1:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Audio verification store did not accept the enrolled speaker",
+                )
+            print(f"[Enrollment] [OK] Audio verification store synchronized")
             
             # Stage 7: Storing data securely
             progress.update_stage('storing_data')

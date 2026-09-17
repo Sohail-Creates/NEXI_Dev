@@ -45,6 +45,11 @@ class CameraResourceClient:
         except (requests.RequestException, ValueError, TypeError) as exc:
             logger.warning("Camera authority unavailable or denied grant: %s", exc)
             self.camera_granted = False
+            if self.lease_id is not None and not self.release_camera(timeout):
+                logger.error(
+                    "Failed to release provisional camera lease %s after grant failure",
+                    self.lease_id,
+                )
             return False
 
     def release_camera(self, timeout=5, lease_id=None, forced=False):

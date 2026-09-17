@@ -19,9 +19,9 @@
 #   The start commands below validate configured TLS files before serving.
 # If activation is blocked by your PowerShell policy, permit scripts for this
 # terminal only: Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned
-# Missing physical hardware, DeepFace, Porcupine access, Piper weights, or
-# provider credit is reported honestly as degraded; HTTP 200 degraded is alive,
-# not proof that every hardware/provider-dependent feature works.
+# Missing physical hardware, Porcupine access/artifacts, model files, or provider
+# credit is reported honestly as degraded; HTTP 200 degraded is alive, not proof
+# that every hardware/provider-dependent feature works.
 
 # === Central -- port 8000 ===
 if (-not (Test-Path .\01_central_server\venv\Scripts\python.exe)) { python -m venv .\01_central_server\venv }
@@ -45,17 +45,19 @@ if (-not (Test-Path .\02_vision_service\venv\Scripts\python.exe)) { python -m ve
 python -m pip install -r .\02_vision_service\requirements.txt
 python -m pip check
 # Use the repository's existing YOLO weights; do not download into the root.
-$env:OBJECT_DETECTION_MODEL = Join-Path (Get-Location).Path '02_vision_service\yolov8n'
+$env:OBJECT_DETECTION_MODEL = Join-Path (Get-Location).Path '02_vision_service\yolov8n.pt'
+# Optional: $env:VISION_CAMERA_DEVICE = '0'  # or a unique camera-name substring
 $tls = python -c "import json; from dotenv import load_dotenv; load_dotenv('.env'); from config.ssl_config import get_tls_config; t=get_tls_config(); t.validate(); assert t.enabled and not t.plaintext_transition; print(json.dumps({'cert':str(t.cert_file),'key':str(t.key_file)}))" | ConvertFrom-Json
 python -m uvicorn vision_service.app:app --app-dir .\02_vision_service --host 127.0.0.1 --port 8001 --env-file .env --ssl-certfile $tls.cert --ssl-keyfile $tls.key
 # Health: https://localhost:8001/health
-# DeepFace/Keras are optional and excluded from the required manifest.
+# The required manifest contains the verified DeepFace/TensorFlow stack.
 
 # === Audio -- port 8002 ===
 if (-not (Test-Path .\03_audio_service\venv\Scripts\python.exe)) { python -m venv .\03_audio_service\venv }
 & .\03_audio_service\venv\Scripts\Activate.ps1
 python -m pip install -r .\03_audio_service\requirements.txt
 python -m pip check
+# Optional: $env:AUDIO_INPUT_DEVICE = 'Microphone Array'  # or a device index
 $tls = python -c "import json; from dotenv import load_dotenv; load_dotenv('.env'); from config.ssl_config import get_tls_config; t=get_tls_config(); t.validate(); assert t.enabled and not t.plaintext_transition; print(json.dumps({'cert':str(t.cert_file),'key':str(t.key_file)}))" | ConvertFrom-Json
 python -m uvicorn main:app --app-dir .\03_audio_service --host 127.0.0.1 --port 8002 --env-file .env --ssl-certfile $tls.cert --ssl-keyfile $tls.key
 # Health: https://localhost:8002/health
@@ -68,7 +70,7 @@ python -m pip check
 $tls = python -c "import json; from dotenv import load_dotenv; load_dotenv('.env'); from config.ssl_config import get_tls_config; t=get_tls_config(); t.validate(); assert t.enabled and not t.plaintext_transition; print(json.dumps({'cert':str(t.cert_file),'key':str(t.key_file)}))" | ConvertFrom-Json
 python -m uvicorn tts_service.app:app --app-dir .\04_tts_service --host 127.0.0.1 --port 8003 --env-file .env --ssl-certfile $tls.cert --ssl-keyfile $tls.key
 # Health: https://localhost:8003/health
-# Install configured Piper voice weights separately before speech testing.
+# The configured Jenny model requires both its `.onnx` and `.onnx.json` files.
 
 # === TeachMe -- port 8004 ===
 if (-not (Test-Path .\05_teachme_service\venv\Scripts\python.exe)) { python -m venv .\05_teachme_service\venv }
@@ -101,7 +103,7 @@ python -m pip check
 $tls = python -c "import json; from dotenv import load_dotenv; load_dotenv('.env'); from config.ssl_config import get_tls_config; t=get_tls_config(); t.validate(); assert t.enabled and not t.plaintext_transition; print(json.dumps({'cert':str(t.cert_file),'key':str(t.key_file)}))" | ConvertFrom-Json
 python -m uvicorn main:app --app-dir .\07_llm_service --host 127.0.0.1 --port 8006 --env-file .env --ssl-certfile $tls.cert --ssl-keyfile $tls.key
 # Health: https://localhost:8006/api/v1/health (not /health)
-# Real OpenRouter credit/key provisioning is an operator action; never fake success.
+# OpenRouter key/credit provisioning remains an operator action; never fake success.
 
 # === All-seven verification -- additional terminal at repository root ===
 & .\01_central_server\venv\Scripts\Activate.ps1
