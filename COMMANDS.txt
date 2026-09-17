@@ -1,10 +1,9 @@
-.\venv\Scripts\Activate.ps1
-
 ================================
 CENTRAL
 ================================
 cd 01_central_server
 .\venv\Scripts\Activate.ps1
+$env:PYTHONPATH = (Resolve-Path ..).Path
 python -m uvicorn main:app --port 8000
 
 
@@ -13,6 +12,7 @@ VISION
 ================================
 cd 02_vision_service
 .\venv\Scripts\Activate.ps1
+$env:PYTHONPATH = (Resolve-Path ..).Path
 python -m uvicorn vision_service.app:app --port 8001
 
 
@@ -21,6 +21,7 @@ AUDIO
 ================================
 cd 03_audio_service
 .\venv\Scripts\Activate.ps1
+$env:PYTHONPATH = (Resolve-Path ..).Path
 python -m uvicorn main:app --port 8002
 
 
@@ -29,6 +30,7 @@ TTS
 ================================
 cd 04_tts_service
 .\venv\Scripts\Activate.ps1
+$env:PYTHONPATH = (Resolve-Path ..).Path
 python -m uvicorn tts_service.app:app --port 8003
 
 
@@ -37,6 +39,7 @@ TEACHME
 ================================
 cd 05_teachme_service
 .\venv\Scripts\Activate.ps1
+$env:PYTHONPATH = (Resolve-Path ..).Path
 python -m uvicorn teachme_service.app:app --port 8004
 
 
@@ -45,6 +48,7 @@ ENROLLMENT
 ================================
 cd 06_enrollment_service
 .\venv\Scripts\Activate.ps1
+$env:PYTHONPATH = (Resolve-Path ..).Path
 python -m uvicorn app.main:app --port 8005
 
 
@@ -53,4 +57,5 @@ LLM
 ================================
 cd 07_llm_service
 .\venv\Scripts\Activate.ps1
+$env:PYTHONPATH = (Resolve-Path ..).Path
 python -m uvicorn main:app --port 8006
