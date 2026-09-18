@@ -20,9 +20,11 @@ import os
 from pathlib import Path
 import platform
 import sys
+import tempfile
 import time
 from typing import Any, Iterable, Mapping
 from uuid import uuid4
+import wave
 
 import httpx
 from dotenv import load_dotenv
@@ -56,13 +58,13 @@ class ServiceURLs:
 
 
 HEALTH_OPERATIONS = (
-    ("central", "/health"),
-    ("vision", "/health"),
-    ("audio", "/health"),
-    ("tts", "/health"),
-    ("teachme", "/health"),
-    ("enrollment", "/health"),
-    ("llm", "/api/v1/health"),
+    ("Central Server", "central", "/health"),
+    ("Vision Service", "vision", "/health"),
+    ("Audio Service", "audio", "/health"),
+    ("TTS Service", "tts", "/health"),
+    ("TeachMe Service", "teachme", "/health"),
+    ("Enrollment Service", "enrollment", "/health"),
+    ("LLM Service", "llm", "/api/v1/health"),
 )
 
 
@@ -159,6 +161,7 @@ class LiveRESTClient:
         json_body: Any | None = None,
         data: Mapping[str, Any] | None = None,
         files: Any | None = None,
+        display: bool = True,
     ) -> LiveResponse:
         url = f"{self.urls.by_name(service)}{path}"
         if not url.lower().startswith("https://"):
@@ -188,8 +191,9 @@ class LiveRESTClient:
                 {"field": field_name, "filename": value[0]}
                 for field_name, value in iterable
             ]
-        print("\nREQUEST")
-        print(_print_json(request_summary))
+        if display:
+            print("\nREQUEST")
+            print(_print_json(request_summary))
 
         response = self._client.request(
             method,
@@ -216,8 +220,9 @@ class LiveRESTClient:
             body=body,
             raw=response.content,
         )
-        print("RESPONSE")
-        print(_print_json({"status": result.status_code, "body": result.body}))
+        if display:
+            print("RESPONSE")
+            print(_print_json({"status": result.status_code, "body": result.body}))
         return result
 
 
@@ -258,15 +263,194 @@ def _prompt_files(label: str, count: int) -> list[Path]:
     return [_existing_file(input(f"  {label} {index + 1}: ").strip(), label) for index in range(count)]
 
 
+def _capture_face_samples(output_dir: Path, count: int = 5) -> list[Path]:
+    """Capture enrollment photos locally; Vision still owns all face processing."""
+    try:
+        import cv2
+    except ImportError as exc:
+        raise RuntimeError("OpenCV is required for interactive face capture") from exc
+
+    selector = os.getenv("VISION_CAMERA_DEVICE", "0").strip()
+    try:
+        device_index = int(selector)
+    except ValueError as exc:
+        raise RuntimeError(
+            "Interactive capture requires VISION_CAMERA_DEVICE to be a numeric camera index"
+        ) from exc
+
+    camera = cv2.VideoCapture(device_index)
+    if not camera.isOpened():
+        camera.release()
+        raise RuntimeError(f"Cannot open camera device {device_index}")
+
+    prompts = ("front", "slightly left", "slightly right", "slightly up", "slightly down")
+    captured: list[Path] = []
+    window_name = "NEXI enrollment - SPACE capture, ESC cancel"
+    try:
+        while len(captured) < count:
+            ok, frame = camera.read()
+            if not ok or frame is None:
+                raise RuntimeError("Camera stopped returning frames")
+            preview = frame.copy()
+            direction = prompts[len(captured)] if len(captured) < len(prompts) else "new angle"
+            cv2.putText(
+                preview,
+                f"Photo {len(captured) + 1}/{count}: {direction} - press SPACE",
+                (20, 35),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0, 255, 0),
+                2,
+                cv2.LINE_AA,
+            )
+            cv2.imshow(window_name, preview)
+            key = cv2.waitKey(1) & 0xFF
+            if key == 27:
+                raise RuntimeError("Face capture cancelled")
+            if key != 32:
+                continue
+            path = output_dir / f"face_{len(captured) + 1}.jpg"
+            if not cv2.imwrite(str(path), frame, [cv2.IMWRITE_JPEG_QUALITY, 95]):
+                raise RuntimeError(f"Failed to save captured image: {path}")
+            captured.append(path)
+            print(f"Captured photo {len(captured)}/{count}: {path.name}")
+    finally:
+        camera.release()
+        cv2.destroyAllWindows()
+    return captured
+
+
+def _capture_voice_samples(
+    output_dir: Path, count: int = 5, duration_seconds: float = 5.0
+) -> list[Path]:
+    """Record WAV inputs locally; Audio still owns embeddings and verification."""
+    try:
+        import numpy as np
+        import sounddevice as sd
+    except ImportError as exc:
+        raise RuntimeError("numpy and sounddevice are required for voice capture") from exc
+
+    configured = os.getenv("AUDIO_INPUT_DEVICE", "").strip()
+    device: int | str | None
+    if not configured:
+        device = None
+    else:
+        try:
+            device = int(configured)
+        except ValueError:
+            device = configured
+
+    try:
+        device_info = sd.query_devices(device, "input")
+    except Exception as exc:
+        raise RuntimeError(f"Cannot resolve audio input device {configured or '<system default>'}") from exc
+    sample_rate = int(round(float(device_info["default_samplerate"])))
+    if sample_rate <= 0:
+        raise RuntimeError("Selected microphone reports an invalid sample rate")
+    print(
+        f"Microphone: {device_info['name']} | sample rate: {sample_rate} Hz | "
+        f"duration: {duration_seconds:.1f}s per sample"
+    )
+
+    captured: list[Path] = []
+    for index in range(count):
+        input(f"Press ENTER to record voice sample {index + 1}/{count}...")
+        print("Recording now - speak naturally and clearly.")
+        try:
+            recording = sd.rec(
+                int(sample_rate * duration_seconds),
+                samplerate=sample_rate,
+                channels=1,
+                dtype="int16",
+                device=device,
+                blocking=True,
+            )
+        except Exception as exc:
+            raise RuntimeError(f"Microphone recording failed: {exc}") from exc
+        samples = np.asarray(recording, dtype=np.int16).reshape(-1)
+        peak = int(np.max(np.abs(samples.astype(np.int32)))) if samples.size else 0
+        if samples.size == 0 or peak == 0:
+            raise RuntimeError(f"Voice sample {index + 1} is empty or silent; enrollment cancelled")
+        path = output_dir / f"voice_{index + 1}.wav"
+        with wave.open(str(path), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(sample_rate)
+            wav_file.writeframes(samples.tobytes())
+        captured.append(path)
+        print(f"Captured voice sample {index + 1}/{count}: {duration_seconds:.1f}s, peak={peak}")
+    return captured
+
+
+def _interactive_enrollment(console: "Sprint2Console") -> LiveResponse:
+    name = input("User name: ").strip()
+    if not name:
+        raise ValueError("User name is required")
+    age_text = input("Age (optional): ").strip()
+    try:
+        age = int(age_text) if age_text else None
+    except ValueError as exc:
+        raise ValueError("Age must be a whole number") from exc
+    relation = input("Relation (optional): ").strip() or None
+
+    with tempfile.TemporaryDirectory(prefix="nexi-enrollment-") as temporary:
+        capture_dir = Path(temporary)
+        print("Camera preview will open. Press SPACE once for each requested angle.")
+        photos = _capture_face_samples(capture_dir)
+        print("Next, record five independent five-second voice samples.")
+        voices = _capture_voice_samples(capture_dir)
+        return console.enroll(name, photos, voices, age=age, relation=relation)
+
+
 class Sprint2Console:
     def __init__(self, client: LiveRESTClient) -> None:
         self.client = client
         self.session = Session()
 
     def health_dashboard(self) -> list[LiveResponse]:
-        return [self.client.request(service, "GET", path) for service, path in HEALTH_OPERATIONS]
+        results: list[LiveResponse] = []
+        rows: list[tuple[str, str, int, str | None]] = []
+        for label, service, path in HEALTH_OPERATIONS:
+            try:
+                response = self.client.request(service, "GET", path, display=False)
+                results.append(response)
+                reported = ""
+                if isinstance(response.body, Mapping):
+                    reported = str(response.body.get("status", "")).strip().lower()
+                if not response.ok:
+                    state = "UNHEALTHY"
+                elif reported in {"degraded", "unavailable", "unhealthy", "error"}:
+                    state = reported.upper()
+                else:
+                    state = "HEALTHY"
+                rows.append((label, state, response.status_code, None))
+            except httpx.HTTPError as exc:
+                body = {"service": service, "status": "unreachable", "error": str(exc)}
+                results.append(LiveResponse(status_code=0, headers={}, body=body, raw=b""))
+                rows.append((label, "UNREACHABLE", 0, str(exc)))
 
-    def enroll(self, name: str, photos: Iterable[Path], voices: Iterable[Path]) -> LiveResponse:
+        print("\n" + "=" * 62)
+        print("NEXI SEVEN-SERVICE HEALTH DASHBOARD")
+        print("=" * 62)
+        for label, state, status_code, _error in rows:
+            http_text = f"HTTP {status_code}" if status_code else "NO RESPONSE"
+            print(f"{label:<22} : {state:<11} ({http_text})")
+        responsive = sum(response.status_code == 200 for response in results)
+        healthy = sum(state == "HEALTHY" for _, state, _, _ in rows)
+        print("-" * 62)
+        print(f"Responsive: {responsive}/7 | Healthy: {healthy}/7")
+        print("=" * 62)
+        return results
+
+    def enroll(
+        self,
+        name: str,
+        photos: Iterable[Path],
+        voices: Iterable[Path],
+        *,
+        age: int | None = None,
+        relation: str | None = None,
+    ) -> LiveResponse:
         photo_paths, voice_paths = list(photos), list(voices)
         if len(photo_paths) != 5 or len(voice_paths) != 5:
             raise ValueError("Enrollment requires exactly five photos and five voice samples")
@@ -278,12 +462,17 @@ class Sprint2Console:
                 ("voice_samples", (path.name, stack.enter_context(path.open("rb")), "audio/wav"))
                 for path in voice_paths
             ]
+            form: dict[str, Any] = {"user_name": name}
+            if age is not None:
+                form["age"] = age
+            if relation is not None:
+                form["relation"] = relation
             response = self.client.request(
                 "enrollment",
                 "POST",
                 "/enrollment/enroll",
                 internal=True,
-                data={"user_name": name},
+                data=form,
                 files=files,
             )
         if isinstance(response.body, Mapping):
@@ -435,7 +624,7 @@ def _wait_for_spacebar(prompt: str) -> None:
 MENU = """
 NEXI Sprint 2 live REST console
  1  Seven-service health dashboard
- 2  Enroll user (five face + five voice samples)
+ 2  Enroll user (live camera + microphone; five samples each)
  3  Voice login / refresh session
  4  Teach fact
  5  Teach object
@@ -458,9 +647,7 @@ NEXI Sprint 2 live REST console
 def _interactive(console: Sprint2Console) -> int:
     actions = {
         "1": lambda: console.health_dashboard(),
-        "2": lambda: console.enroll(
-            input("User name: ").strip(), _prompt_files("photo", 5), _prompt_files("voice sample", 5)
-        ),
+        "2": lambda: _interactive_enrollment(console),
         "3": lambda: console.voice_login(
             _existing_file(input("Synthesized-speech WAV path: ").strip(), "voice fixture")
         ),

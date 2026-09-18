@@ -1,10 +1,15 @@
+# NEXI HTTPS service startup commands
+# Run each section in a separate PowerShell terminal opened at the repository root.
+# Stop any older instance using the same port before starting its replacement.
+
 ================================
 CENTRAL
 ================================
 cd 01_central_server
 .\venv\Scripts\Activate.ps1
-$env:PYTHONPATH = (Resolve-Path ..).Path
-python -m uvicorn main:app --port 8000
+$repo = (Resolve-Path ..).Path
+$env:PYTHONPATH = $repo
+python -m uvicorn main:app --host 127.0.0.1 --port 8000 --env-file "$repo\.env" --ssl-certfile "$repo\config\certificates\nexi-local.crt" --ssl-keyfile "$repo\config\certificates\nexi-local.key"
 
 
 ================================
@@ -12,8 +17,9 @@ VISION
 ================================
 cd 02_vision_service
 .\venv\Scripts\Activate.ps1
-$env:PYTHONPATH = (Resolve-Path ..).Path
-python -m uvicorn vision_service.app:app --port 8001
+$repo = (Resolve-Path ..).Path
+$env:PYTHONPATH = $repo
+python -m uvicorn vision_service.app:app --host 127.0.0.1 --port 8001 --env-file "$repo\.env" --ssl-certfile "$repo\config\certificates\nexi-local.crt" --ssl-keyfile "$repo\config\certificates\nexi-local.key"
 
 
 ================================
@@ -21,8 +27,9 @@ AUDIO
 ================================
 cd 03_audio_service
 .\venv\Scripts\Activate.ps1
-$env:PYTHONPATH = (Resolve-Path ..).Path
-python -m uvicorn main:app --port 8002
+$repo = (Resolve-Path ..).Path
+$env:PYTHONPATH = $repo
+python -m uvicorn main:app --host 127.0.0.1 --port 8002 --env-file "$repo\.env" --ssl-certfile "$repo\config\certificates\nexi-local.crt" --ssl-keyfile "$repo\config\certificates\nexi-local.key"
 
 
 ================================
@@ -30,8 +37,9 @@ TTS
 ================================
 cd 04_tts_service
 .\venv\Scripts\Activate.ps1
-$env:PYTHONPATH = (Resolve-Path ..).Path
-python -m uvicorn tts_service.app:app --port 8003
+$repo = (Resolve-Path ..).Path
+$env:PYTHONPATH = $repo
+python -m uvicorn tts_service.app:app --host 127.0.0.1 --port 8003 --env-file "$repo\.env" --ssl-certfile "$repo\config\certificates\nexi-local.crt" --ssl-keyfile "$repo\config\certificates\nexi-local.key"
 
 
 ================================
@@ -39,8 +47,9 @@ TEACHME
 ================================
 cd 05_teachme_service
 .\venv\Scripts\Activate.ps1
-$env:PYTHONPATH = (Resolve-Path ..).Path
-python -m uvicorn teachme_service.app:app --port 8004
+$repo = (Resolve-Path ..).Path
+$env:PYTHONPATH = $repo
+python -m uvicorn teachme_service.app:app --host 127.0.0.1 --port 8004 --env-file "$repo\.env" --ssl-certfile "$repo\config\certificates\nexi-local.crt" --ssl-keyfile "$repo\config\certificates\nexi-local.key"
 
 
 ================================
@@ -48,8 +57,9 @@ ENROLLMENT
 ================================
 cd 06_enrollment_service
 .\venv\Scripts\Activate.ps1
-$env:PYTHONPATH = (Resolve-Path ..).Path
-python -m uvicorn app.main:app --port 8005
+$repo = (Resolve-Path ..).Path
+$env:PYTHONPATH = $repo
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8005 --env-file "$repo\.env" --ssl-certfile "$repo\config\certificates\nexi-local.crt" --ssl-keyfile "$repo\config\certificates\nexi-local.key"
 
 
 ================================
@@ -57,5 +67,6 @@ LLM
 ================================
 cd 07_llm_service
 .\venv\Scripts\Activate.ps1
-$env:PYTHONPATH = (Resolve-Path ..).Path
-python -m uvicorn main:app --port 8006
+$repo = (Resolve-Path ..).Path
+$env:PYTHONPATH = $repo
+python -m uvicorn main:app --host 127.0.0.1 --port 8006 --env-file "$repo\.env" --ssl-certfile "$repo\config\certificates\nexi-local.crt" --ssl-keyfile "$repo\config\certificates\nexi-local.key"
