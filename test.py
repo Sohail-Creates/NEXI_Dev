@@ -4,7 +4,7 @@ This file is an external client. It deliberately imports no NEXI service
 package, reads no service database, and implements no application policy. Each
 action sends an HTTPS request to an operation published in ``docs/openapi`` and
 prints the actual request metadata and response. Start the seven services with
-the commands in ``run.txt`` before using the console.
+the commands in ``commands.txt`` before using the console.
 
 The filename is retained because it is the established operator entry point;
 the former design-reference implementation has been replaced in full.
@@ -352,10 +352,19 @@ def _capture_voice_samples(
         f"duration: {duration_seconds:.1f}s per sample"
     )
 
+    enrollment_phrases = (
+        "Hello NEXI, this is my natural speaking voice.",
+        "I am registering my voice for secure access.",
+        "Please recognize me when I speak clearly.",
+        "My voice confirms that I am present.",
+        "NEXI can now verify my identity by voice.",
+    )
     captured: list[Path] = []
     for index in range(count):
-        input(f"Press ENTER to record voice sample {index + 1}/{count}...")
-        print("Recording now - speak naturally and clearly.")
+        phrase = enrollment_phrases[index % len(enrollment_phrases)]
+        print(f'Voice sample {index + 1}/{count}: "{phrase}"')
+        input("Press ENTER when you are ready to speak...")
+        print(f'Recording now - say: "{phrase}"')
         try:
             recording = sd.rec(
                 int(sample_rate * duration_seconds),
@@ -474,9 +483,17 @@ class Sprint2Console:
                 internal=True,
                 data=form,
                 files=files,
+                display=False,
             )
         if isinstance(response.body, Mapping):
             self.session.accept_token(response.body, voice_paths[0])
+        if response.ok:
+            print(f"{name} enrolled successfully with 5 photos and 5 audio samples.")
+        else:
+            message = "Enrollment request failed"
+            if isinstance(response.body, Mapping):
+                message = str(response.body.get("message") or response.body.get("detail") or message)
+            print(f"Enrollment failed (HTTP {response.status_code}): {message}")
         return response
 
     def voice_login(self, voice: Path) -> LiveResponse:
@@ -622,7 +639,7 @@ def _wait_for_spacebar(prompt: str) -> None:
 
 
 MENU = """
-NEXI Sprint 2 live REST console
+NEXI live REST console
  1  Seven-service health dashboard
  2  Enroll user (live camera + microphone; five samples each)
  3  Voice login / refresh session
