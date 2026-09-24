@@ -9,9 +9,6 @@ from pathlib import Path
 import subprocess
 import sys
 
-import yaml
-
-
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = ROOT / "docs" / "openapi"
 SERVICES = {
@@ -40,11 +37,19 @@ def _child(service: str) -> None:
 
 
 def generate_all() -> None:
+    import yaml
+
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     schemas: dict[str, dict] = {}
     for service, (directory, _, _) in SERVICES.items():
+        service_python = ROOT / directory / "venv" / "Scripts" / "python.exe"
+        if not service_python.is_file():
+            raise RuntimeError(
+                f"OpenAPI generation requires the isolated {service} interpreter: "
+                f"{service_python}"
+            )
         result = subprocess.run(
-            [sys.executable, str(Path(__file__).resolve()), "--service", service],
+            [str(service_python), str(Path(__file__).resolve()), "--service", service],
             cwd=ROOT / directory,
             check=False,
             capture_output=True,

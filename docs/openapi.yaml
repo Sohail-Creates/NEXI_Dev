@@ -81,7 +81,6 @@ paths:
         content:
           application/json:
             schema:
-              additionalProperties: true
               type: object
               title: User Data
         required: true
@@ -485,7 +484,9 @@ paths:
         content:
           multipart/form-data:
             schema:
-              $ref: '#/components/schemas/Body_register_user_users_register_post'
+              allOf:
+              - $ref: '#/components/schemas/Body_register_user_users_register_post'
+              title: Body
       responses:
         '200':
           description: Successful Response
@@ -633,7 +634,6 @@ paths:
           application/json:
             schema:
               type: object
-              additionalProperties: true
               title: Payload
       responses:
         '200':
@@ -912,10 +912,10 @@ paths:
       summary: Store User Conversation
       description: "Store a new conversation for a user.\n\nPOST /users/{user_id}/conversations\n\
         \nExpected JSON payload:\n{\n    \"user_message\": \"Tell me about gardening\"\
-        ,\n    \"assistant_response\": \"Flowers are amazing...\",\n    \"mood\":\
-        \ \"happy\",\n    \"language\": \"en\",\n    \"metadata\": {}  // optional\n\
-        }\n\nResponse:\n{\n    \"status\": \"success\",\n    \"user_id\": \"sara123\"\
-        ,\n    \"timestamp\": \"2026-03-08T15:45:00Z\"\n}"
+        ,\n    \"assistant_response\": \"Flowers are amazing...\",\n    \"language\"\
+        : \"en\",\n    \"metadata\": {}  // optional\n}\n\nResponse:\n{\n    \"status\"\
+        : \"success\",\n    \"user_id\": \"sara123\",\n    \"timestamp\": \"2026-03-08T15:45:00Z\"\
+        \n}"
       operationId: store_user_conversation_users__user_id__conversations_post
       parameters:
       - name: user_id
@@ -931,7 +931,6 @@ paths:
             application/json:
               schema:
                 type: object
-                additionalProperties: true
                 title: Response Store User Conversation Users  User Id  Conversations
                   Post
         '422':
@@ -1032,7 +1031,6 @@ paths:
             application/json:
               schema:
                 type: object
-                additionalProperties: true
                 title: Response Get User Conversations Endpoint Users  User Id  Conversations
                   Get
         '422':
@@ -1106,7 +1104,6 @@ paths:
             application/json:
               schema:
                 type: object
-                additionalProperties: true
                 title: Response Delete All User Conversations Users  User Id  Conversations
                   Delete
         '422':
@@ -1184,7 +1181,6 @@ paths:
             application/json:
               schema:
                 type: object
-                additionalProperties: true
                 title: Response Get Single Conversation Conversations  Conversation
                   Id  Get
         '422':
@@ -1252,7 +1248,6 @@ paths:
           content:
             application/json:
               schema:
-                additionalProperties: true
                 type: object
                 title: Response Get Conversation Statistics Admin Stats Get
         '400':
@@ -2477,7 +2472,6 @@ paths:
           content:
             application/json:
               schema:
-                additionalProperties: true
                 type: object
                 title: Response Get Focus Mode Resources Focus Get
         '400':
@@ -2590,7 +2584,7 @@ paths:
         schema:
           anyOf:
           - type: number
-            exclusiveMinimum: 0
+            exclusiveMinimum: 0.0
           - type: 'null'
           title: Holder Started
       - name: holder_port
@@ -2610,7 +2604,6 @@ paths:
             application/json:
               schema:
                 type: object
-                additionalProperties: true
                 title: Response Request Resource Resources Request Post
         '422':
           description: Error response
@@ -2680,7 +2673,6 @@ paths:
             application/json:
               schema:
                 type: object
-                additionalProperties: true
                 title: Response Acknowledge Grant Resources Acknowledge  Lease Id  Post
         '422':
           description: Error response
@@ -2750,7 +2742,6 @@ paths:
             application/json:
               schema:
                 type: object
-                additionalProperties: true
                 title: Response Revoke Lease Resources Revoke  Lease Id  Post
         '422':
           description: Error response
@@ -2831,7 +2822,6 @@ paths:
             application/json:
               schema:
                 type: object
-                additionalProperties: true
                 title: Response Release Resource Resources Release  Lease Id  Post
         '422':
           description: Error response
@@ -2905,7 +2895,6 @@ paths:
             application/json:
               schema:
                 type: object
-                additionalProperties: true
                 title: Response Get Lease Status Resources Status  Lease Id  Get
         '422':
           description: Error response
@@ -2979,7 +2968,6 @@ paths:
           content:
             application/json:
               schema:
-                additionalProperties: true
                 type: object
                 title: Response Get All Resources Status Resources Status Get
         '400':
@@ -3046,7 +3034,6 @@ paths:
           content:
             application/json:
               schema:
-                additionalProperties: true
                 type: object
                 title: Response Resource Manager Health Resources Health Get
         '400':
@@ -3109,7 +3096,6 @@ paths:
           content:
             application/json:
               schema:
-                additionalProperties: true
                 type: object
                 title: Response Sync Status Sync Status Get
         '400':
@@ -3170,7 +3156,6 @@ paths:
           content:
             application/json:
               schema:
-                additionalProperties: true
                 type: object
                 title: Response Root  Get
         '400':
@@ -3231,7 +3216,6 @@ paths:
           content:
             application/json:
               schema:
-                additionalProperties: true
                 type: object
                 title: Response Health Health Get
         '400':
@@ -3433,7 +3417,6 @@ components:
           type: string
           title: Object
         context:
-          additionalProperties: true
           type: object
           title: Context
       type: object
@@ -3487,7 +3470,6 @@ components:
           type: string
           title: Name
         attributes:
-          additionalProperties: true
           type: object
           title: Attributes
         category:
@@ -3523,7 +3505,6 @@ components:
           title: Service Name
         items:
           items:
-            additionalProperties: true
             type: object
           type: array
           title: Items
@@ -3548,11 +3529,6 @@ components:
         type:
           type: string
           title: Error Type
-        input:
-          title: Input
-        ctx:
-          type: object
-          title: Context
       type: object
       required:
       - loc

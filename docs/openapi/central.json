@@ -242,7 +242,6 @@
       "FactData": {
         "properties": {
           "context": {
-            "additionalProperties": true,
             "title": "Context",
             "type": "object"
           },
@@ -327,7 +326,6 @@
       "ObjectData": {
         "properties": {
           "attributes": {
-            "additionalProperties": true,
             "title": "Attributes",
             "type": "object"
           },
@@ -385,7 +383,6 @@
         "properties": {
           "items": {
             "items": {
-              "additionalProperties": true,
               "type": "object"
             },
             "title": "Items",
@@ -405,13 +402,6 @@
       },
       "ValidationError": {
         "properties": {
-          "ctx": {
-            "title": "Context",
-            "type": "object"
-          },
-          "input": {
-            "title": "Input"
-          },
           "loc": {
             "items": {
               "anyOf": [
@@ -459,7 +449,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Root  Get",
                   "type": "object"
                 }
@@ -560,7 +549,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Get Conversation Statistics Admin Stats Get",
                   "type": "object"
                 }
@@ -1617,7 +1605,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Get Single Conversation Conversations  Conversation Id  Get",
                   "type": "object"
                 }
@@ -1720,7 +1707,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Health Health Get",
                   "type": "object"
                 }
@@ -1831,7 +1817,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Acknowledge Grant Resources Acknowledge  Lease Id  Post",
                   "type": "object"
                 }
@@ -1935,7 +1920,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Get Focus Mode Resources Focus Get",
                   "type": "object"
                 }
@@ -2039,7 +2023,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Resource Manager Health Resources Health Get",
                   "type": "object"
                 }
@@ -2164,7 +2147,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Release Resource Resources Release  Lease Id  Post",
                   "type": "object"
                 }
@@ -2334,7 +2316,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "exclusiveMinimum": 0,
+                  "exclusiveMinimum": 0.0,
                   "type": "number"
                 },
                 {
@@ -2368,7 +2350,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Request Resource Resources Request Post",
                   "type": "object"
                 }
@@ -2482,7 +2463,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Revoke Lease Resources Revoke  Lease Id  Post",
                   "type": "object"
                 }
@@ -2586,7 +2566,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Get All Resources Status Resources Status Get",
                   "type": "object"
                 }
@@ -2701,7 +2680,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Get Lease Status Resources Status  Lease Id  Get",
                   "type": "object"
                 }
@@ -2804,7 +2782,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Sync Status Sync Status Get",
                   "type": "object"
                 }
@@ -3785,7 +3762,6 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
                 "title": "User Data",
                 "type": "object"
               }
@@ -4218,7 +4194,12 @@
           "content": {
             "multipart/form-data": {
               "schema": {
-                "$ref": "#/components/schemas/Body_register_user_users_register_post"
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/Body_register_user_users_register_post"
+                  }
+                ],
+                "title": "Body"
               }
             }
           }
@@ -5101,7 +5082,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Delete All User Conversations Users  User Id  Conversations Delete",
                   "type": "object"
                 }
@@ -5258,7 +5238,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Get User Conversations Endpoint Users  User Id  Conversations Get",
                   "type": "object"
                 }
@@ -5353,7 +5332,7 @@
         ]
       },
       "post": {
-        "description": "Store a new conversation for a user.\n\nPOST /users/{user_id}/conversations\n\nExpected JSON payload:\n{\n    \"user_message\": \"Tell me about gardening\",\n    \"assistant_response\": \"Flowers are amazing...\",\n    \"mood\": \"happy\",\n    \"language\": \"en\",\n    \"metadata\": {}  // optional\n}\n\nResponse:\n{\n    \"status\": \"success\",\n    \"user_id\": \"sara123\",\n    \"timestamp\": \"2026-03-08T15:45:00Z\"\n}",
+        "description": "Store a new conversation for a user.\n\nPOST /users/{user_id}/conversations\n\nExpected JSON payload:\n{\n    \"user_message\": \"Tell me about gardening\",\n    \"assistant_response\": \"Flowers are amazing...\",\n    \"language\": \"en\",\n    \"metadata\": {}  // optional\n}\n\nResponse:\n{\n    \"status\": \"success\",\n    \"user_id\": \"sara123\",\n    \"timestamp\": \"2026-03-08T15:45:00Z\"\n}",
         "operationId": "store_user_conversation_users__user_id__conversations_post",
         "parameters": [
           {
@@ -5371,7 +5350,6 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
                   "title": "Response Store User Conversation Users  User Id  Conversations Post",
                   "type": "object"
                 }
@@ -5485,7 +5463,6 @@
           "content": {
             "application/json": {
               "schema": {
-                "additionalProperties": true,
                 "title": "Payload",
                 "type": "object"
               }
