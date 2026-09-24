@@ -12,11 +12,10 @@ Phases 5-9 Implementation:
 
 import logging
 import asyncio
-import json
+from pathlib import Path
 from typing import Optional, Dict, Any, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import Enum
 import aiohttp
 from shared.security import merge_internal_headers
 from config.ssl_config import client_ssl_context
@@ -177,7 +176,10 @@ class ConversationOrchestrator:
         
         return None
     
-    async def _post_with_retry(self, url: str, json_data: Dict = None, data=None, **kwargs) -> Optional[Dict]:
+    async def _post_with_retry(
+        self, url: str, json_data: Dict = None, data=None,
+        audio_file: tuple[str, bytes] | None = None, expect_audio: bool = False, **kwargs
+    ) -> Optional[Dict | bytes]:
         """
         Make POST request with retries.
         
@@ -196,17 +198,25 @@ class ConversationOrchestrator:
         kwargs["headers"] = merge_internal_headers(kwargs.get("headers"))
         for attempt in range(self.max_retries):
             try:
+                request_data = data
+                if audio_file is not None:
+                    request_data = aiohttp.FormData()
+                    request_data.add_field(
+                        "file", audio_file[1], filename=audio_file[0], content_type="audio/wav"
+                    )
                 async with self.session.post(
                     url,
                     json=json_data,
-                    data=data,
+                    data=request_data,
                     **kwargs
                 ) as resp:
                     if resp.status in [200, 201]:
-                        try:
-                            return await resp.json()
-                        except:
-                            return {"status": "success"}
+                        if expect_audio:
+                            if not resp.content_type.startswith("audio/"):
+                                logger.error("Expected audio from %s, received %s", url, resp.content_type)
+                                return None
+                            return await resp.read()
+                        return await resp.json()
                     else:
                         logger.warning(f"POST {url}: status {resp.status}")
             except Exception as e:
@@ -239,8 +249,7 @@ class ConversationOrchestrator:
             
             result = await self._post_with_retry(
                 f"{self.audio_url}/api/v1/transcribe",
-                data=audio_data,
-                headers={"Content-Type": "application/octet-stream"}
+                audio_file=(Path(audio_file_path).name, audio_data),
             )
             
             if result and result.get("success"):
@@ -255,6 +264,20 @@ class ConversationOrchestrator:
         except Exception as e:
             logger.error(f"Transcription error: {e}")
             return None, None
+
+    async def verify_speaker(self, audio_file_path: str) -> tuple[str, float] | None:
+        """Use Audio's existing speaker matcher before any user-scoped RAG call."""
+        from audio_service.routes.advanced_routes import get_speaker_service
+
+        speaker_service = get_speaker_service()
+        user_id, confidence = await asyncio.to_thread(
+            speaker_service.verify_speaker, audio_file_path
+        )
+        threshold = speaker_service.get_verification_threshold()
+        if user_id == "unknown" or confidence < threshold:
+            logger.warning("Speaker verification rejected: confidence=%.4f", confidence)
+            return None
+        return user_id, confidence
     
     async def generate_llm_response(
         self,
@@ -327,13 +350,10 @@ class ConversationOrchestrator:
             }
             
             result = await self._post_with_retry(
-                f"{self.tts_url}/api/v1/speak",
-                json_data=payload
+                f"{self.tts_url}/speak", json_data=payload, expect_audio=True
             )
             
             if result:
-                # TTS returns WAV bytes directly
-                # If result is JSON, extract audio_bytes; otherwise it's raw WAV
                 if isinstance(result, bytes):
                     logger.info(f"Received {len(result)} bytes of audio")
                     return result
@@ -350,7 +370,7 @@ class ConversationOrchestrator:
     
     async def process_conversation_turn(
         self,
-        user_id: str,
+        user_id: str | None,
         audio_file_path: str,
         speaker_id: str = "jenny"
     ) -> Optional[ConversationTurn]:
@@ -366,14 +386,25 @@ class ConversationOrchestrator:
             ConversationTurn with results or None if critical errors
         """
         start_time = datetime.now()
-        turn = ConversationTurn(user_id=user_id, user_text="")
+        turn = ConversationTurn(user_id=user_id or "", user_text="")
         
         try:
             # Update state
             self.state_manager.transition_to(ConversationState.PROCESSING_QUERY)
             
-            # Step 1: Transcribe
-            logger.info("Step 1/4: Transcribing audio...")
+            # Verify before transcription or any user-scoped downstream request.
+            verified = await self.verify_speaker(audio_file_path)
+            if verified is None:
+                turn.error = "Speaker verification failed"
+                return turn
+            verified_user_id, confidence = verified
+            if user_id is not None and user_id != verified_user_id:
+                turn.error = "Speaker does not match requested user"
+                return turn
+            turn.user_id = verified_user_id
+            logger.info("Speaker verified: user_id=%s confidence=%.4f", verified_user_id, confidence)
+
+            logger.info("Transcribing verified speech...")
             user_text, language = await self.transcribe_audio(audio_file_path)
             
             if not user_text:
@@ -393,7 +424,7 @@ class ConversationOrchestrator:
             
             llm_response = await self.generate_llm_response(
                 user_text=user_text,
-                user_id=user_id,
+                user_id=verified_user_id,
                 language=language,
                 context=context
             )
@@ -421,9 +452,16 @@ class ConversationOrchestrator:
             
             turn.tts_audio_bytes = audio_bytes
             
-            # Step 4: Update state
-            logger.info("Step 4/4: Preparing for playback...")
-            self.state_manager.transition_to("CONVERSATION_ACTIVE")
+            # Audio owns speaker playback; keep hardware work off the event loop.
+            from main import playback_manager
+            if playback_manager is None:
+                turn.error = "Playback manager unavailable"
+                return turn
+            playback = await asyncio.to_thread(playback_manager.play_audio_bytes, audio_bytes)
+            if not playback.get("success"):
+                turn.error = playback.get("error") or "Playback failed"
+                return turn
+            self.state_manager.transition_to(ConversationState.CONVERSATION_ACTIVE)
             
             # Record metrics
             duration_ms = (datetime.now() - start_time).total_seconds() * 1000

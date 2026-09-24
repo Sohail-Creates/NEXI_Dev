@@ -11,8 +11,9 @@ import asyncio
 import os
 from pathlib import Path
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Request, status, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File
 from shared.jwt_manager import require_user_ownership
+from shared.security import require_internal_service
 from pydantic import BaseModel
 from audio_service.services.conversation_state import ConversationState
 
@@ -53,6 +54,23 @@ class ConversationResponse(BaseModel):
     duration_ms: int = 0
     language: str = "en"
     error: Optional[str] = None
+
+
+@router.post("/playback/start")
+async def start_playback(
+    file: UploadFile = File(...), _trusted: Optional[str] = Depends(require_internal_service)
+):
+    """Play a supplied WAV through Audio's existing playback manager."""
+    from main import playback_manager
+
+    if playback_manager is None:
+        raise HTTPException(status_code=503, detail="Playback manager unavailable")
+    if not file.filename or not file.filename.lower().endswith(".wav"):
+        raise HTTPException(status_code=400, detail="A WAV file is required")
+    result = await asyncio.to_thread(playback_manager.play_audio_bytes, await file.read())
+    if not result.get("success"):
+        raise HTTPException(status_code=503, detail=result.get("error", "Playback failed"))
+    return result
 
 
 @router.post("/conversation/turn", response_model=ConversationResponse)

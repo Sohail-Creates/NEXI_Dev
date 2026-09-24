@@ -5,6 +5,7 @@ Implements endpoints for wake word detection, speaker verification, and speech-t
 
 import logging
 import os
+import asyncio
 from datetime import datetime
 import numpy as np
 from fastapi import APIRouter, HTTPException, status, UploadFile, File
@@ -92,19 +93,29 @@ async def start_wake_word_detection():
     """
     try:
         logger.info("Received request to start wake word detection")
+        from main import orchestrator
+        if orchestrator is None:
+            raise HTTPException(status_code=503, detail="Conversation orchestrator unavailable")
+        loop = asyncio.get_running_loop()
         
         # Define callback for when wake word is detected
         def on_wake_word_detected(audio_file: str, confidence: float):
-            """
-            Callback function triggered when wake word is detected.
-            
-            This logs the detection event and could trigger additional processing
-            like automatic speaker verification and transcription.
-            """
-            logger.info(
-                f"Wake word detected callback: audio={audio_file}, confidence={confidence}"
+            """Schedule the same verified turn for wake word and direct voice."""
+            future = asyncio.run_coroutine_threadsafe(
+                orchestrator.process_conversation_turn(None, audio_file), loop
             )
-            # Future enhancement: Automatically process the command here
+
+            def report_result(completed):
+                try:
+                    turn = completed.result()
+                    if turn is None or turn.error:
+                        logger.error("Triggered conversation failed: %s", turn.error if turn else "no result")
+                    else:
+                        logger.info("Triggered conversation completed for user %s", turn.user_id)
+                except Exception:
+                    logger.exception("Triggered conversation raised")
+
+            future.add_done_callback(report_result)
         
         # Start the wake word detection service
         wake_word_service.start_listening(detection_callback=on_wake_word_detected)
@@ -118,6 +129,8 @@ async def start_wake_word_detection():
         logger.info("Wake word detection started successfully")
         return response
         
+    except HTTPException:
+        raise
     except WakeWordError as e:
         logger.error(f"Wake word service error: {str(e)}")
         raise HTTPException(

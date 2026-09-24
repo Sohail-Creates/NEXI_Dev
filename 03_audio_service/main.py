@@ -316,6 +316,7 @@ app.add_middleware(
         "/api/v1/verify-speaker": (10 * 1024 * 1024, ("multipart/form-data",)),
         "/api/v1/process-voice": (10 * 1024 * 1024, ("multipart/form-data",)),
         "/api/v1/transcribe": (10 * 1024 * 1024, ("multipart/form-data", "application/octet-stream")),
+        "/api/v1/playback/start": (10 * 1024 * 1024, ("multipart/form-data",)),
     },
 )
 app.add_middleware(
@@ -323,6 +324,7 @@ app.add_middleware(
     protected_prefixes=(
         "/api/v1/process-voice", "/api/v1/verify-speaker", "/api/v1/enroll-speaker",
         "/api/v1/transcribe", "/api/v1/speaker-sync",
+        "/api/v1/playback/start",
     ),
 )
 

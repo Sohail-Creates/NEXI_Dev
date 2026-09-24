@@ -135,6 +135,7 @@ class PlaybackManager:
                 # Reset playback state
                 self.playback_position = 0
                 self.interrupt_flag.clear()
+                self.playback_error = None
                 
                 # Set state to playing
                 self._set_state(PlaybackState.PLAYING)
@@ -150,6 +151,15 @@ class PlaybackManager:
                 # Wait for playback to complete or be interrupted
                 logger.debug("Waiting for playback to complete...")
                 self.playback_thread.join(timeout=300)  # 5 minute max timeout
+                if self.playback_thread.is_alive():
+                    self.interrupt_flag.set()
+                    self._set_state(PlaybackState.ERROR)
+                    return {"success": False, "state": PlaybackState.ERROR.value,
+                            "duration": 0, "interrupted": False, "error": "Playback timed out"}
+                if self.playback_error:
+                    self._set_state(PlaybackState.ERROR)
+                    return {"success": False, "state": PlaybackState.ERROR.value,
+                            "duration": 0, "interrupted": False, "error": self.playback_error}
                 
                 # Check if interrupted
                 interrupted = self.interrupt_flag.is_set()
@@ -244,6 +254,7 @@ class PlaybackManager:
         
         except Exception as e:
             logger.error(f"Playback loop error: {e}")
+            self.playback_error = str(e)
     
     def stop_playback_internal(self):
         """

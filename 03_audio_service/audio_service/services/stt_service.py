@@ -738,25 +738,6 @@ class STTService:
             logger.error(f"Audio validation failed: {str(e)}")
             return False
     
-    def transcribe_audio(
-        self,
-        audio_file_path: str,
-        language: str = "auto"
-    ) -> Tuple[str, str, float]:
-        """
-        Transcribe audio using Groq Whisper API (primary online STT).
-        
-        Args:
-            audio_file_path: Path to audio file
-            language: Language code ('en', 'ur', or 'auto')
-        
-        Returns:
-            Tuple of (transcription_text, detected_language, duration_seconds)
-        """
-        # (This is already the primary implementation using Groq API)
-        return self._transcribe_with_groq(audio_file_path, language)
-
-    
     def get_supported_languages(self) -> list:
         """
         Get list of supported language codes.

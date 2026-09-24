@@ -166,7 +166,7 @@ def test_e_registration_with_embeddings_alias_is_identical(monkeypatch) -> None:
     assert _route(_user_app(), "/users/register-with-embeddings", "POST").endpoint is _route(
         _user_app(), "/users/add-embeddings", "POST"
     ).endpoint
-    enhanced = (ROOT_PATH / "test_nexi_system_enhanced.py").read_text(encoding="utf-8")
+    enhanced = (ROOT_PATH / "test.py").read_text(encoding="utf-8")
     assert "CENTRAL_SERVER}/users/add-embeddings" not in enhanced
     assert '"/enrollment/enroll"' in enhanced
     print(

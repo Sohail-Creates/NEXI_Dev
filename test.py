@@ -13,6 +13,7 @@ the former design-reference implementation has been replaced in full.
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 import json
@@ -23,6 +24,7 @@ import sys
 import tempfile
 import time
 from typing import Any, Iterable, Mapping
+from urllib.parse import quote
 from uuid import uuid4
 import wave
 
@@ -120,6 +122,15 @@ def _safe_payload(value: Any, key: str = "") -> Any:
 
 def _print_json(value: Any) -> str:
     return json.dumps(_safe_payload(value), indent=2, ensure_ascii=False, default=str)
+
+
+def _response_message(body: Any, default: str) -> str:
+    if not isinstance(body, Mapping):
+        return default
+    error = body.get("error")
+    if isinstance(error, Mapping):
+        return str(error.get("message") or default)
+    return str(body.get("message") or body.get("detail") or default)
 
 
 @dataclass
@@ -411,6 +422,66 @@ def _interactive_enrollment(console: "Sprint2Console") -> LiveResponse:
         return console.enroll(name, photos, voices, age=age, relation=relation)
 
 
+def _interactive_training(console: "Sprint2Console", *, replace: bool) -> LiveResponse:
+    user_id = input("Enrolled user ID: ").strip()
+    if not user_id:
+        raise ValueError("User ID is required")
+    with tempfile.TemporaryDirectory(prefix="nexi-training-") as temporary:
+        capture_dir = Path(temporary)
+        print("Press SPACE in the camera preview for each of five photos.")
+        photos = _capture_face_samples(capture_dir)
+        print("Record five independent five-second voice samples.")
+        voices = _capture_voice_samples(capture_dir)
+        if replace:
+            return console.reenroll(user_id, photos, voices)
+        return console.improve_training(user_id, photos, voices)
+
+
+def _interactive_teach(console: "Sprint2Console") -> LiveResponse:
+    item_type = input("Teach [fact/object]: ").strip().lower()
+    if item_type == "fact":
+        data = {
+            "subject": input("Subject: ").strip(),
+            "predicate": input("Predicate: ").strip(),
+            "object": input("Object/value: ").strip(),
+            "context": {},
+        }
+    elif item_type == "object":
+        data = {
+            "name": input("Object name: ").strip(),
+            "category": input("Category (optional): ").strip() or None,
+            "description": input("Description (optional): ").strip() or None,
+            "attributes": {},
+        }
+    else:
+        raise ValueError("Choose fact or object")
+    return console.teach(item_type, data)
+
+
+def _confirmed_delete(label: str) -> bool:
+    return input(f"Type DELETE to remove {label}: ").strip() == "DELETE"
+
+
+def _interactive_delete_object(console: "Sprint2Console") -> LiveResponse | None:
+    item_id = input("Taught object item ID: ").strip()
+    if not item_id:
+        raise ValueError("Item ID is required")
+    if not _confirmed_delete(item_id):
+        print("Deletion cancelled")
+        return None
+    return console.delete_object(item_id)
+
+
+def _interactive_delete_user(console: "Sprint2Console") -> LiveResponse | None:
+    user_name = input("Enrolled user name: ").strip()
+    if not user_name:
+        raise ValueError("User name is required")
+    if not _confirmed_delete(user_name):
+        print("Deletion cancelled")
+        return None
+    return console.delete_user(user_name)
+
+
 class Sprint2Console:
     def __init__(self, client: LiveRESTClient) -> None:
         self.client = client
@@ -461,40 +532,80 @@ class Sprint2Console:
         relation: str | None = None,
     ) -> LiveResponse:
         photo_paths, voice_paths = list(photos), list(voices)
-        if len(photo_paths) != 5 or len(voice_paths) != 5:
-            raise ValueError("Enrollment requires exactly five photos and five voice samples")
-        with ExitStack() as stack:
-            files = [
-                ("photos", (path.name, stack.enter_context(path.open("rb")), "image/jpeg"))
-                for path in photo_paths
-            ] + [
-                ("voice_samples", (path.name, stack.enter_context(path.open("rb")), "audio/wav"))
-                for path in voice_paths
-            ]
-            form: dict[str, Any] = {"user_name": name}
-            if age is not None:
-                form["age"] = age
-            if relation is not None:
-                form["relation"] = relation
-            response = self.client.request(
-                "enrollment",
-                "POST",
-                "/enrollment/enroll",
-                internal=True,
-                data=form,
-                files=files,
-                display=False,
+        form: dict[str, Any] = {"user_name": name}
+        if age is not None:
+            form["age"] = age
+        if relation is not None:
+            form["relation"] = relation
+        response = self._with_resource_trace(
+            lambda: self._upload_samples(
+                "/enrollment/enroll", photo_paths, voice_paths, "photos", "voice_samples", form
             )
+        )
         if isinstance(response.body, Mapping):
             self.session.accept_token(response.body, voice_paths[0])
         if response.ok:
             print(f"{name} enrolled successfully with 5 photos and 5 audio samples.")
         else:
-            message = "Enrollment request failed"
-            if isinstance(response.body, Mapping):
-                message = str(response.body.get("message") or response.body.get("detail") or message)
-            print(f"Enrollment failed (HTTP {response.status_code}): {message}")
+            print(
+                f"Enrollment failed (HTTP {response.status_code}): "
+                f"{_response_message(response.body, 'Enrollment request failed')}"
+            )
         return response
+
+    def _upload_samples(
+        self, path: str, photos: Iterable[Path], voices: Iterable[Path],
+        photo_field: str, voice_field: str, form: Mapping[str, Any] | None = None,
+        *, authenticated: bool = False,
+    ) -> LiveResponse:
+        photo_paths, voice_paths = list(photos), list(voices)
+        if len(photo_paths) != 5 or len(voice_paths) != 5:
+            raise ValueError("Five photos and five voice samples are required")
+        with ExitStack() as stack:
+            files = [
+                (photo_field, (path.name, stack.enter_context(path.open("rb")), "image/jpeg"))
+                for path in photo_paths
+            ] + [
+                (voice_field, (path.name, stack.enter_context(path.open("rb")), "audio/wav"))
+                for path in voice_paths
+            ]
+            return self.client.request(
+                "enrollment", "POST", path, internal=not authenticated,
+                bearer=self.session.token if authenticated else None, data=form, files=files,
+            )
+
+    def _with_resource_trace(self, action):
+        print("Resource status BEFORE:")
+        self.resource_status()
+        try:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                result = executor.submit(action)
+                print("Resource status DURING request:")
+                self.resource_status()
+                return result.result()
+        finally:
+            print("Resource status AFTER:")
+            self.resource_status()
+
+    def improve_training(self, user_id: str, photos: Iterable[Path], voices: Iterable[Path]) -> LiveResponse:
+        self._require_session()
+        if user_id != self.session.user_id:
+            raise ValueError("Training user ID must match the authenticated session")
+        return self._upload_samples(
+            f"/enrollment/improve-training/{quote(user_id, safe='')}",
+            photos, voices, "additional_photos", "additional_voice_samples",
+            authenticated=True,
+        )
+
+    def reenroll(self, user_id: str, photos: Iterable[Path], voices: Iterable[Path]) -> LiveResponse:
+        self._require_session()
+        if user_id != self.session.user_id:
+            raise ValueError("Re-enrollment user ID must match the authenticated session")
+        return self._upload_samples(
+            f"/enrollment/update-model/{quote(user_id, safe='')}",
+            photos, voices, "new_photos", "new_voice_samples",
+            authenticated=True,
+        )
 
     def voice_login(self, voice: Path) -> LiveResponse:
         with voice.open("rb") as handle:
@@ -513,7 +624,7 @@ class Sprint2Console:
             return
         print("Session is missing or expired; biometric re-authentication is required.")
         voice = self.session.voice_fixture
-        if voice is None:
+        if voice is None or not voice.is_file():
             voice = _existing_file(input("Synthesized-speech WAV path: ").strip(), "voice fixture")
         response = self.voice_login(voice)
         if not response.ok or not self.session.valid():
@@ -529,17 +640,32 @@ class Sprint2Console:
         )
 
     def list_knowledge(self, item_type: str) -> LiveResponse:
+        if item_type not in {"fact", "object"}:
+            raise ValueError("Choose fact or object")
         path = "/knowledge/facts" if item_type == "fact" else "/knowledge/objects"
         return self.client.request("teachme", "GET", path, internal=True)
 
-    def ask(self, question: str) -> LiveResponse:
+    def delete_object(self, item_id: str) -> LiveResponse:
+        return self.client.request(
+            "teachme", "DELETE", f"/forget/{quote(item_id, safe='')}", internal=True
+        )
+
+    def list_users(self) -> LiveResponse:
+        response = self.client.request("central", "GET", "/users/list", internal=True, display=False)
+        users = response.body.get("users", []) if isinstance(response.body, Mapping) else []
+        print(f"GET /users/list -> HTTP {response.status_code}; enrolled users: {len(users)}")
+        for user in users:
+            if isinstance(user, Mapping):
+                print(f"  {user.get('user_id', '?')}: {user.get('name') or user.get('user_name') or '?'}")
+        if not response.ok:
+            print(_print_json(response.body))
+        return response
+
+    def delete_user(self, user_name: str) -> LiveResponse:
         self._require_session()
         return self.client.request(
-            "central",
-            "POST",
-            "/api/v1/rag/query",
+            "enrollment", "DELETE", f"/enrollment/delete-user/{quote(user_name, safe='')}",
             bearer=self.session.token,
-            json_body={"query": question},
         )
 
     def conversation_history(self) -> LiveResponse:
@@ -581,48 +707,69 @@ class Sprint2Console:
             self.session.active_call_id = None
         return response
 
-    def vision_camera_analysis(self) -> LiveResponse:
-        return self.client.request("vision", "POST", "/api/v1/analyze/complete", internal=True)
+    def video_call(self, call_id: str | None = None, *, wait_for_end: bool = True) -> LiveResponse:
+        print("Resource status BEFORE video call:")
+        self.resource_status()
+        started = self.call_start(call_id)
+        print("Resource status DURING video call:")
+        self.resource_status()
+        if not started.ok:
+            return started
+        if wait_for_end:
+            input("Press ENTER to end the video call... ")
+        ended = self.call_end()
+        print("Resource status AFTER video call:")
+        self.resource_status()
+        return ended
 
-    def vision_face_upload(self, image: Path) -> LiveResponse:
-        with image.open("rb") as handle:
-            return self.client.request(
-                "vision",
-                "POST",
-                "/api/v1/detect/faces/upload",
-                internal=True,
-                files={"file": (image.name, handle, "image/jpeg")},
-            )
-
-    def speak_jenny(self, text: str, output: Path | None = None) -> LiveResponse:
-        response = self.client.request(
-            "tts",
-            "POST",
-            "/speak",
-            internal=True,
-            json_body={"text": text, "voice_id": "jenny", "language": "en"},
-        )
-        if response.ok and output is not None and response.raw:
-            output.write_bytes(response.raw)
-            print(f"Audio response saved to {output.resolve()}")
-        return response
-
-    def manual_voice_fallback(self) -> tuple[LiveResponse, LiveResponse]:
-        """Use spacebar controls while Audio owns recording and lease logic."""
-        _wait_for_spacebar("Press SPACE to start the direct-voice fallback")
+    def return_user(self, mode: str = "manual") -> LiveResponse:
+        """Drive Audio's existing voice capture and verified turn over REST."""
+        self._require_session()
+        if mode == "wake":
+            started = self.client.request("audio", "POST", "/api/v1/wake-word/start", internal=True)
+            if not started.ok:
+                return started
+            try:
+                _wait_for_spacebar("Press SPACE after speaking to stop the wake/direct-voice listener")
+                return self.client.request("audio", "GET", "/api/v1/orchestration/health")
+            finally:
+                self.client.request("audio", "POST", "/api/v1/wake-word/stop", internal=True)
+        if mode != "manual":
+            raise ValueError("Mode must be manual or wake")
         started = self.client.request(
-            "audio", "POST", "/api/v1/wake-word/start", internal=True
+            "audio", "POST", "/api/v1/conversation/start", bearer=self.session.token,
+            params={"user_id": self.session.user_id},
         )
         if not started.ok:
-            return started, started
+            return started
         try:
-            _wait_for_spacebar("Press SPACE to stop and release the microphone")
-        finally:
-            stopped = self.client.request(
-                "audio", "POST", "/api/v1/wake-word/stop", internal=True
+            _wait_for_spacebar("Press SPACE to record a conversation turn")
+            recording = self.client.request("audio", "POST", "/api/v1/record-until-silence", internal=True)
+            if not recording.ok or not isinstance(recording.body, Mapping) or not recording.body.get("success"):
+                print("Recording unavailable; no conversation result is being claimed.")
+                return recording
+            response = self.client.request(
+                "audio", "POST", "/api/v1/conversation/turn", bearer=self.session.token,
+                json_body={"user_id": self.session.user_id,
+                           "audio_file_path": recording.body["audio_file"],
+                           "language": "en", "speaker_id": "jenny"},
             )
-        return started, stopped
+            if isinstance(response.body, Mapping):
+                print(f"Conversation result: {response.body.get('llm_response') or response.body.get('error')}")
+                if response.ok and response.body.get("success"):
+                    self.conversation_history()
+            return response
+        finally:
+            self.client.request(
+                "audio", "POST", "/api/v1/conversation/end", bearer=self.session.token,
+                params={"user_id": self.session.user_id},
+            )
 
+    def audio_status(self) -> tuple[LiveResponse, LiveResponse]:
+        print("Audio service circuit breaker and orchestration health (not general settings):")
+        breaker = self.client.request("audio", "GET", "/api/v1/stt/circuit-breaker-status")
+        orchestration = self.client.request("audio", "GET", "/api/v1/orchestration/health")
+        return breaker, orchestration
 
 def _wait_for_spacebar(prompt: str) -> None:
     """Console-only input handling; all application work remains REST-owned."""
@@ -640,23 +787,20 @@ def _wait_for_spacebar(prompt: str) -> None:
 
 MENU = """
 NEXI live REST console
- 1  Seven-service health dashboard
- 2  Enroll user (live camera + microphone; five samples each)
- 3  Voice login / refresh session
- 4  Teach fact
- 5  Teach object
- 6  List taught facts or objects
- 7  Ask through restricted RAG
- 8  Read authenticated conversation history
- 9  Cloud-sync status
-10  Resource status
-11  Camera status
-12  Start simulated video call
-13  End simulated video call
-14  Vision camera object/face analysis
-15  Vision face detection from uploaded image
-16  Synthesize English speech with Jenny
-17  Manual direct-voice fallback (SPACE starts/stops)
+ 1  Service status (seven live health endpoints)
+ 2  New user (five photos + five voice samples)
+ 3  Improve training
+ 4  Re-enrollment (replace biometric samples)
+ 5  Return user (record, verify, RAG, Jenny, playback)
+ 6  Teach fact or object
+ 7  View taught facts and objects
+ 8  Delete taught object
+ 9  List enrolled users
+10  Delete enrolled user
+11  Video call (start/end and resource trace)
+12  Resource and camera status
+13  Cloud-sync status
+14  Audio circuit breaker and orchestration health
  0  Exit
 """
 
@@ -665,43 +809,18 @@ def _interactive(console: Sprint2Console) -> int:
     actions = {
         "1": lambda: console.health_dashboard(),
         "2": lambda: _interactive_enrollment(console),
-        "3": lambda: console.voice_login(
-            _existing_file(input("Synthesized-speech WAV path: ").strip(), "voice fixture")
-        ),
-        "4": lambda: console.teach(
-            "fact",
-            {
-                "subject": input("Subject: ").strip(),
-                "predicate": input("Predicate: ").strip(),
-                "object": input("Object/value: ").strip(),
-                "context": {},
-            },
-        ),
-        "5": lambda: console.teach(
-            "object",
-            {
-                "name": input("Object name: ").strip(),
-                "category": input("Category (optional): ").strip() or None,
-                "description": input("Description (optional): ").strip() or None,
-                "attributes": {},
-            },
-        ),
-        "6": lambda: console.list_knowledge(input("Type [fact/object]: ").strip().lower()),
-        "7": lambda: console.ask(input("Question: ").strip()),
-        "8": lambda: console.conversation_history(),
-        "9": lambda: console.sync_status(),
-        "10": lambda: console.resource_status(),
-        "11": lambda: console.camera_status(),
-        "12": lambda: console.call_start(input("Call ID (blank=generated): ").strip() or None),
-        "13": lambda: console.call_end(input("Call ID (blank=current): ").strip() or None),
-        "14": lambda: console.vision_camera_analysis(),
-        "15": lambda: console.vision_face_upload(
-            _existing_file(input("Image path: ").strip(), "image")
-        ),
-        "16": lambda: console.speak_jenny(
-            input("Text: ").strip(), ROOT / "manual-jenny-output.wav"
-        ),
-        "17": lambda: console.manual_voice_fallback(),
+        "3": lambda: _interactive_training(console, replace=False),
+        "4": lambda: _interactive_training(console, replace=True),
+        "5": lambda: console.return_user(input("Trigger [manual/wake]: ").strip().lower() or "manual"),
+        "6": lambda: _interactive_teach(console),
+        "7": lambda: (console.list_knowledge("fact"), console.list_knowledge("object")),
+        "8": lambda: _interactive_delete_object(console),
+        "9": lambda: console.list_users(),
+        "10": lambda: _interactive_delete_user(console),
+        "11": lambda: console.video_call(input("Call ID (blank=generated): ").strip() or None),
+        "12": lambda: (console.resource_status(), console.camera_status()),
+        "13": lambda: console.sync_status(),
+        "14": lambda: console.audio_status(),
     }
     while True:
         print(MENU)
