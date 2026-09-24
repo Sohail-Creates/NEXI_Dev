@@ -5,13 +5,34 @@ Handles stop word detection, VAD recording, and conversation state management en
 
 import logging
 import asyncio
+import os
+import tempfile
+import threading
+from pathlib import Path
 from typing import Optional
-from fastapi import APIRouter, HTTPException, status, Query
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status, Query
 from pydantic import BaseModel
 from audio_service.services.conversation_state import ConversationState
+from shared.security import require_internal_service
 
 logger = logging.getLogger(__name__)
+
+_active_recording_lock = threading.Lock()
+_active_recording_stop: Optional[threading.Event] = None
+
+
+def _set_active_recording(stop_event: Optional[threading.Event]) -> None:
+    global _active_recording_stop
+    with _active_recording_lock:
+        _active_recording_stop = stop_event
+
+
+def _interrupt_active_recording() -> bool:
+    with _active_recording_lock:
+        if _active_recording_stop is None:
+            return False
+        _active_recording_stop.set()
+        return True
 
 # Get wake word service for coordination with stop word detection
 def get_wake_word_service():
@@ -216,6 +237,96 @@ async def record_until_silence():
         )
 
 
+@router.post(
+    "/record-until-silence/audio",
+    response_class=Response,
+    responses={
+        200: {
+            "content": {"audio/wav": {"schema": {"type": "string", "format": "binary"}}},
+            "description": "VAD-delimited microphone recording",
+        }
+    },
+)
+async def record_until_silence_audio(
+    request: Request,
+    _trusted: Optional[str] = Depends(require_internal_service),
+):
+    """Capture one VAD-delimited utterance and return transient WAV bytes.
+
+    Central's resource authority owns the microphone lease. The existing VAD
+    recorder may require a temporary WAV path, but the file is read into memory
+    and removed before this handler returns.
+    """
+    from main import vad_recorder, conversation_state_manager
+    from audio_service.services.keyboard_wake_word import MicrophoneLeaseClient
+
+    if vad_recorder is None:
+        raise HTTPException(status_code=503, detail="VAD recorder not initialized")
+
+    lease_client = MicrophoneLeaseClient()
+    lease_id = None
+    temp_path = None
+    try:
+        lease_id = await asyncio.to_thread(lease_client.acquire)
+        if conversation_state_manager:
+            current = conversation_state_manager.get_state()
+            if current != ConversationState.PROCESSING_QUERY:
+                conversation_state_manager.transition_to(ConversationState.PROCESSING_QUERY)
+
+        temp_file = tempfile.NamedTemporaryFile(prefix="nexi-vad-", suffix=".wav", delete=False)
+        temp_path = temp_file.name
+        temp_file.close()
+
+        # VADRecorder expects threading.Event semantics. A lightweight adapter
+        # keeps request-disconnect cancellation visible to its worker thread.
+        recording_stop = threading.Event()
+        _set_active_recording(recording_stop)
+        recording_task = asyncio.create_task(
+            asyncio.to_thread(vad_recorder.record_until_silence, temp_path, recording_stop)
+        )
+        while not recording_task.done():
+            if await request.is_disconnected():
+                recording_stop.set()
+            await asyncio.sleep(0.05)
+        result = await recording_task
+
+        if not result.get("success"):
+            raise HTTPException(status_code=503, detail=result.get("error", "Recording failed"))
+        audio = await asyncio.to_thread(Path(temp_path).read_bytes)
+        if not audio.startswith(b"RIFF") or b"WAVE" not in audio[:16]:
+            raise HTTPException(status_code=500, detail="Recorder returned an invalid WAV payload")
+
+        return Response(
+            content=audio,
+            media_type="audio/wav",
+            headers={
+                "X-NEXI-Recording-Duration": str(result.get("duration", 0)),
+                "X-NEXI-Recording-Stop-Reason": str(result.get("stopped_by", "unknown")),
+                "X-NEXI-Recording-Chunks": str(result.get("chunks_recorded", 0)),
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Transient VAD capture failed: %s", exc, exc_info=True)
+        raise HTTPException(status_code=503, detail=f"Microphone capture failed: {exc}") from exc
+    finally:
+        _set_active_recording(None)
+        if lease_id is not None:
+            released = await asyncio.to_thread(lease_client.release, lease_id)
+            if not released:
+                logger.error("Microphone lease release was not acknowledged: %s", lease_id)
+                raise HTTPException(
+                    status_code=503,
+                    detail="Microphone lease release was not acknowledged",
+                )
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.unlink(temp_path)
+            except OSError as exc:
+                logger.warning("Could not remove transient recording %s: %s", temp_path, exc)
+
+
 @router.post("/interrupt-playback", status_code=status.HTTP_200_OK)
 async def interrupt_playback():
     """
@@ -226,7 +337,8 @@ async def interrupt_playback():
     """
     from main import playback_manager
     
-    if not playback_manager:
+    recording_interrupted = _interrupt_active_recording()
+    if not playback_manager and not recording_interrupted:
         logger.warning("Playback manager not initialized")
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -236,14 +348,16 @@ async def interrupt_playback():
     logger.info("Playback interruption requested")
     
     try:
-        playback_manager.activate_interrupt()
+        if playback_manager:
+            playback_manager.activate_interrupt()
         
-        state = playback_manager.get_state()
+        state = playback_manager.get_state() if playback_manager else {"state": "unavailable"}
         
         return {
             "success": True,
-            "message": "Playback interrupted",
-            "state": state.get("state")
+            "message": "Active audio operation interrupted",
+            "state": state.get("state"),
+            "recording_interrupted": recording_interrupted,
         }
     
     except Exception as e:

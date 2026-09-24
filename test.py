@@ -22,6 +22,7 @@ from pathlib import Path
 import platform
 import sys
 import tempfile
+import threading
 import time
 from typing import Any, Iterable, Mapping
 from urllib.parse import quote
@@ -143,6 +144,60 @@ class LiveResponse:
     @property
     def ok(self) -> bool:
         return 200 <= self.status_code < 300
+
+
+@dataclass
+class ConversationCallCounts:
+    record: int = 0
+    verify_speaker: int = 0
+    transcribe: int = 0
+    rag: int = 0
+    speak: int = 0
+    playback: int = 0
+
+
+class SpaceSessionStop:
+    """Watch SPACE without owning any application behavior."""
+
+    def __init__(self, on_stop) -> None:
+        self.requested = threading.Event()
+        self._closed = threading.Event()
+        self._on_stop = on_stop
+        self._thread = threading.Thread(target=self._watch, daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def close(self) -> None:
+        self._closed.set()
+        self._thread.join(timeout=0.5)
+
+    def _watch(self) -> None:
+        if platform.system() == "Windows":
+            import msvcrt
+
+            while not self._closed.is_set():
+                if msvcrt.kbhit() and msvcrt.getwch() == " ":
+                    self._stop()
+                    return
+                time.sleep(0.03)
+            return
+
+        import select
+
+        while not self._closed.is_set():
+            readable, _, _ = select.select([sys.stdin], [], [], 0.1)
+            if readable and sys.stdin.read(1) == " ":
+                self._stop()
+                return
+
+    def _stop(self) -> None:
+        self.requested.set()
+        print("\nSPACE received: ending the whole conversation session...")
+        try:
+            self._on_stop()
+        except Exception as exc:
+            print(f"Audio interrupt warning: {type(exc).__name__}: {exc}")
 
 
 class LiveRESTClient:
@@ -723,8 +778,7 @@ class Sprint2Console:
         return ended
 
     def return_user(self, mode: str = "manual") -> LiveResponse:
-        """Drive Audio's existing voice capture and verified turn over REST."""
-        self._require_session()
+        """Drive Audio's wake or manual conversation surface over REST."""
         if mode == "wake":
             started = self.client.request("audio", "POST", "/api/v1/wake-word/start", internal=True)
             if not started.ok:
@@ -736,34 +790,161 @@ class Sprint2Console:
                 self.client.request("audio", "POST", "/api/v1/wake-word/stop", internal=True)
         if mode != "manual":
             raise ValueError("Mode must be manual or wake")
-        started = self.client.request(
-            "audio", "POST", "/api/v1/conversation/start", bearer=self.session.token,
-            params={"user_id": self.session.user_id},
-        )
-        if not started.ok:
-            return started
-        try:
-            _wait_for_spacebar("Press SPACE to record a conversation turn")
-            recording = self.client.request("audio", "POST", "/api/v1/record-until-silence", internal=True)
-            if not recording.ok or not isinstance(recording.body, Mapping) or not recording.body.get("success"):
-                print("Recording unavailable; no conversation result is being claimed.")
-                return recording
-            response = self.client.request(
-                "audio", "POST", "/api/v1/conversation/turn", bearer=self.session.token,
-                json_body={"user_id": self.session.user_id,
-                           "audio_file_path": recording.body["audio_file"],
-                           "language": "en", "speaker_id": "jenny"},
-            )
-            if isinstance(response.body, Mapping):
-                print(f"Conversation result: {response.body.get('llm_response') or response.body.get('error')}")
-                if response.ok and response.body.get("success"):
-                    self.conversation_history()
-            return response
-        finally:
+        return self._manual_conversation_loop()
+
+    def _manual_conversation_loop(self) -> LiveResponse:
+        """Run a verify-once multi-turn session using service APIs only."""
+        _wait_for_spacebar("Press SPACE to start the manual conversation session")
+        input("Press ENTER to record your first query... ")
+
+        counts = ConversationCallCounts()
+        last_response = LiveResponse(0, {}, {"message": "Session ended before capture"}, b"")
+        conversation_started = False
+
+        def interrupt_audio() -> None:
             self.client.request(
-                "audio", "POST", "/api/v1/conversation/end", bearer=self.session.token,
-                params={"user_id": self.session.user_id},
+                "audio", "POST", "/api/v1/interrupt-playback", internal=True, display=False
             )
+
+        stopper = SpaceSessionStop(interrupt_audio)
+        stopper.start()
+        try:
+            first_turn = True
+            while not stopper.requested.is_set():
+                print("\nAudio is recording. Speak naturally; recording stops when you finish speaking.")
+                recording = self.client.request(
+                    "audio", "POST", "/api/v1/record-until-silence/audio",
+                    internal=True, display=False,
+                )
+                counts.record += 1
+                last_response = recording
+                if stopper.requested.is_set():
+                    break
+                if not recording.ok or not recording.raw.startswith(b"RIFF"):
+                    print(
+                        "Audio recording failed: "
+                        f"{_response_message(recording.body, 'microphone capture unavailable')}"
+                    )
+                    return recording
+                duration = recording.headers.get("x-nexi-recording-duration")
+                print(f"Audio recording completed{f' ({duration}s)' if duration else ''}.")
+
+                if first_turn:
+                    print("Verifying the speaker...")
+                    verification = self.client.request(
+                        "audio", "POST", "/api/v1/verify-speaker", internal=True,
+                        files={"file": ("conversation.wav", recording.raw, "audio/wav")},
+                        display=False,
+                    )
+                    counts.verify_speaker += 1
+                    last_response = verification
+                    body = verification.body if isinstance(verification.body, Mapping) else {}
+                    if not verification.ok or not body.get("is_verified"):
+                        print("User not enrolled — please enroll first")
+                        return verification
+                    if not self.session.accept_token(body):
+                        raise RuntimeError("Speaker verification succeeded without a session token")
+                    print(
+                        f"Speaker verified as {self.session.user_id} "
+                        f"(confidence {float(body.get('confidence', 0.0)):.2f})."
+                    )
+                    started = self.client.request(
+                        "audio", "POST", "/api/v1/conversation/start",
+                        bearer=self.session.token, params={"user_id": self.session.user_id},
+                        display=False,
+                    )
+                    last_response = started
+                    if not started.ok:
+                        print(
+                            "Conversation session could not start: "
+                            f"{_response_message(started.body, 'unknown error')}"
+                        )
+                        return started
+                    conversation_started = True
+                    first_turn = False
+
+                print("Transcribing the recorded speech...")
+                transcription = self.client.request(
+                    "audio", "POST", "/api/v1/transcribe", internal=True,
+                    params={"language": "auto"},
+                    files={"file": ("conversation.wav", recording.raw, "audio/wav")},
+                    display=False,
+                )
+                counts.transcribe += 1
+                last_response = transcription
+                transcript = (
+                    transcription.body.get("text", "").strip()
+                    if transcription.ok and isinstance(transcription.body, Mapping)
+                    else ""
+                )
+                if not transcript:
+                    print("No clear speech was transcribed. Listening for the next query.")
+                    continue
+                print(f'Transcribed text: "{transcript}"')
+
+                print("Sending the transcribed query through restricted RAG...")
+                rag = self.client.request(
+                    "central", "POST", "/api/v1/rag/query", bearer=self.session.token,
+                    json_body={"query": transcript},
+                    display=False,
+                )
+                counts.rag += 1
+                last_response = rag
+                if not rag.ok or not isinstance(rag.body, Mapping):
+                    print(f"RAG request failed: {_response_message(rag.body, 'unknown error')}")
+                    continue
+
+                answer = str(rag.body.get("response") or "")
+                metadata = rag.body.get("metadata")
+                metadata_source = metadata.get("source") if isinstance(metadata, Mapping) else None
+                source = str(rag.body.get("source") or metadata_source or "")
+                if source != "teachme_grounded":
+                    print("No matching taught knowledge was found.")
+                    print(f"NEXI: {answer}")
+                    print("TTS was skipped. Listening for the next query...")
+                    continue
+
+                print("Matching taught knowledge was found.")
+                print(f"Grounded response: {answer}")
+                print("Converting the grounded response to Jenny speech...")
+                speech = self.client.request(
+                    "tts", "POST", "/speak", internal=True,
+                    json_body={"text": answer, "language": "en", "voice_id": "jenny"},
+                    display=False,
+                )
+                counts.speak += 1
+                last_response = speech
+                if stopper.requested.is_set():
+                    break
+                if not speech.ok or not speech.raw.startswith(b"RIFF"):
+                    print("Speech synthesis failed; playback was skipped.")
+                    continue
+                print("Speech synthesis completed. Playing the response...")
+                playback = self.client.request(
+                    "audio", "POST", "/api/v1/playback/start", internal=True,
+                    files={"file": ("nexi-response.wav", speech.raw, "audio/wav")},
+                    display=False,
+                )
+                counts.playback += 1
+                last_response = playback
+                if playback.ok:
+                    print("Playback completed. Listening for the next query...")
+                else:
+                    print(
+                        "Playback failed: "
+                        f"{_response_message(playback.body, 'audio output unavailable')}"
+                    )
+
+            return last_response
+        finally:
+            stopper.close()
+            if conversation_started and self.session.token and self.session.user_id:
+                self.client.request(
+                    "audio", "POST", "/api/v1/conversation/end", bearer=self.session.token,
+                    params={"user_id": self.session.user_id},
+                    display=False,
+                )
+            print("Conversation session ended.")
 
     def audio_status(self) -> tuple[LiveResponse, LiveResponse]:
         print("Audio service circuit breaker and orchestration health (not general settings):")
