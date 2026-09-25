@@ -36,7 +36,13 @@ if str(CENTRAL_DIR) not in sys.path:
     sys.path.insert(0, str(CENTRAL_DIR))
 
 from basic_commands import BASIC_COMMAND_RESPONSES
-from restricted_rag import NonEnglishQueryError, RAGQueryRequest, RestrictedRAGPipeline
+from restricted_rag import (
+    NonEnglishQueryError,
+    RAGQueryRequest,
+    RestrictedRAGPipeline,
+    _retrieval_terms,
+    is_grounded,
+)
 from teachme_connector import TeachMeConnector
 
 LLM_DIR = ROOT / "07_llm_service"
@@ -247,7 +253,7 @@ async def test_c_genuine_no_match_never_calls_llm():
     print(f"CALL_COUNTS teachme={teachme.calls} llm={llm.calls}")
     assert result.source == "no_match"
     assert result.response == "I don't know this yet. Please teach me."
-    assert teachme.queries == [fixture_query]
+    assert teachme.queries == ["orbital period neptune"]
     assert teachme.calls == 1
     assert llm.calls == 0
 
@@ -277,6 +283,46 @@ class _GroundedLLM:
         self.calls += 1
         self.prompts.append(prompt)
         return True, {"response": "NEXI favorite fruit is mango."}
+
+
+async def test_near_threshold_match_retrieves_by_content_terms_and_reports_grounded_source():
+    class HometownTeachMe:
+        async def search_by_embedding(self, **kwargs):
+            assert kwargs["threshold"] < 0.55
+            assert kwargs["query"] == "hometown"
+            return {
+                "results": [{
+                    "type": "fact",
+                    "data": {
+                        "subject": "My hometown",
+                        "predicate": "is Layyah",
+                        "object": "punjab, pakistan",
+                        "context": {},
+                    },
+                    "similarity": 0.5824,
+                    "confidence": 1.0,
+                }]
+            }
+
+    class HometownLLM:
+        async def generate_response(self, prompt, **_kwargs):
+            assert "My hometown is Layyah punjab, pakistan" in prompt
+            return True, {"response": "Your hometown is Layyah, Punjab, Pakistan."}
+
+    query = "Can you know my hometown? I am from"
+    result = await RestrictedRAGPipeline(HometownTeachMe(), HometownLLM()).answer(query)
+
+    assert _retrieval_terms(query) == ["hometown"]
+    assert result.source == "teachme_grounded"
+    assert result.best_similarity == 0.5824
+    assert is_grounded(
+        "Your hometown is Layyah, Punjab, Pakistan.",
+        ["My hometown is Layyah punjab, pakistan"],
+    )
+    print(
+        f"HOMETOWN_RAG source={result.source} score={result.best_similarity:.4f} "
+        f"query_terms={list(result.retrieval_terms)} response={result.response!r}"
+    )
 
 
 async def test_d_server_prompt_extra_field_rejection_and_english_gate():

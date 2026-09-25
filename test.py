@@ -890,6 +890,15 @@ class Sprint2Console:
                 )
                 counts.rag += 1
                 last_response = rag
+                query_tokens = rag.headers.get("x-nexi-query-tokens")
+                retrieval_terms = rag.headers.get("x-nexi-retrieval-terms")
+                best_similarity = rag.headers.get("x-nexi-best-similarity")
+                if query_tokens is not None:
+                    print(f"Normalized query tokens: {[token for token in query_tokens.split(',') if token]}")
+                if retrieval_terms is not None:
+                    print(f"RAG search terms: {[term for term in retrieval_terms.split(',') if term]}")
+                if best_similarity is not None:
+                    print(f"Best knowledge similarity: {float(best_similarity):.4f}")
                 if not rag.ok or not isinstance(rag.body, Mapping):
                     print(f"RAG request failed: {_response_message(rag.body, 'unknown error')}")
                     continue
@@ -898,8 +907,17 @@ class Sprint2Console:
                 metadata = rag.body.get("metadata")
                 metadata_source = metadata.get("source") if isinstance(metadata, Mapping) else None
                 source = str(rag.body.get("source") or metadata_source or "")
-                if source != "teachme_grounded":
+                if source == "no_match":
                     print("No matching taught knowledge was found.")
+                    print(f"NEXI: {answer}")
+                    print("TTS was skipped. Listening for the next query...")
+                    continue
+                if source == "grounding_failure":
+                    print("A relevant knowledge candidate was retrieved, but the generated answer failed grounding validation.")
+                    print("No answer was spoken. Try a more direct question or rephrase the stored fact.")
+                    continue
+                if source != "teachme_grounded":
+                    print(f"RAG did not return a speakable grounded answer (source={source or 'missing'}).")
                     print(f"NEXI: {answer}")
                     print("TTS was skipped. Listening for the next query...")
                     continue

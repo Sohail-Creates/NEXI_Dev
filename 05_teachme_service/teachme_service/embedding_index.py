@@ -47,9 +47,11 @@ class EmbeddingIndex:
     def _initialize_faiss_index(self):
         """Initialize FAISS index"""
         try:
-            # Create a simple flat index for CPU
-            self.index = faiss.IndexFlatL2(self.dimension)
-            logger.info("FAISS index created (L2 distance)")
+            # Sentence-transformer vectors are normalized. Inner product is
+            # therefore cosine similarity and keeps FAISS results identical to
+            # the linear fallback's score semantics.
+            self.index = faiss.IndexFlatIP(self.dimension)
+            logger.info("FAISS index created (cosine similarity)")
         except Exception as e:
             logger.error(f"Failed to initialize FAISS index: {e}")
             self.use_faiss = False
@@ -76,6 +78,12 @@ class EmbeddingIndex:
             if vector.shape[1] != self.dimension:
                 logger.warning(f"Embedding dimension mismatch for {item_id}: expected {self.dimension}, got {vector.shape[1]}")
                 return False
+
+            norm = np.linalg.norm(vector, axis=1, keepdims=True)
+            if np.any(norm == 0):
+                logger.warning("Refusing zero-length embedding for %s", item_id)
+                return False
+            vector = vector / norm
             
             # Store in memory
             self.embeddings[item_id] = vector[0]
@@ -136,6 +144,8 @@ class EmbeddingIndex:
                 self.index_mapping.append(item_id)
             
             vectors_array = np.array(vectors, dtype=np.float32)
+            norms = np.linalg.norm(vectors_array, axis=1, keepdims=True)
+            vectors_array = vectors_array / np.where(norms == 0, 1.0, norms)
             self.index.add(vectors_array)
             
             logger.info(f"FAISS index rebuilt with {len(vectors)} embeddings")
@@ -165,6 +175,10 @@ class EmbeddingIndex:
         
         try:
             query_vector = np.array([query_embedding], dtype=np.float32)
+            norm = np.linalg.norm(query_vector, axis=1, keepdims=True)
+            if np.any(norm == 0):
+                return []
+            query_vector = query_vector / norm
             
             # Use FAISS if available and working
             if self.use_faiss and self.index is not None and len(self.index_mapping) > 0:
@@ -180,11 +194,10 @@ class EmbeddingIndex:
     def _faiss_search(self, query_vector: np.ndarray, k: int, threshold: float) -> List[Tuple[str, float]]:
         """Search using FAISS"""
         try:
-            # FAISS returns L2 distances, convert to similarity (lower distance = higher sim)
-            distances, indices = self.index.search(query_vector, min(k, len(self.index_mapping)))
+            similarities, indices = self.index.search(query_vector, min(k, len(self.index_mapping)))
             
             results = []
-            for dist, idx in zip(distances[0], indices[0]):
+            for score, idx in zip(similarities[0], indices[0]):
                 if idx == -1:  # Invalid index
                     continue
                 
@@ -193,8 +206,7 @@ class EmbeddingIndex:
                     continue
                 
                 item_id = self.index_mapping[idx]
-                # Convert L2 distance to similarity (inverse, normalized)
-                similarity = 1.0 / (1.0 + float(dist))
+                similarity = float(score)
                 
                 if similarity >= threshold:
                     results.append((item_id, similarity))
@@ -221,9 +233,7 @@ class EmbeddingIndex:
             if norm_query == 0 or norm_embedding == 0:
                 similarity = 0.0
             else:
-                similarity = dot_product / (norm_query * norm_embedding)
-                # Convert cosine similarity [-1, 1] to [0, 1]
-                similarity = (similarity + 1.0) / 2.0
+                similarity = float(dot_product / (norm_query * norm_embedding))
             
             if similarity >= threshold:
                 results.append((item_id, similarity))
