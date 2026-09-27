@@ -300,16 +300,15 @@ STOP_WORD_CONFIG = {
 # ============================================================================
 # VAD RECORDER CONFIGURATION (NEW)
 # ============================================================================
-# ENHANCED FIX: Reduced max_recording_seconds from 30s to 5s for faster response
-# - Turn 1 query typically 3-5 seconds
-# - Stop word detection responds within 1 second instead of 30 seconds
-# - User can continue speaking after 5s by saying query again
+# Utterances end on VAD silence; this duration is only the safety backstop.
+# The 30-second default permits a natural long utterance without allowing an
+# accidentally-open microphone stream to run indefinitely.
 VAD_RECORDER_CONFIG = {
     "sample_rate": int(os.getenv("VAD_RECORDER_SAMPLE_RATE", 16000)),
     "chunk_size": int(os.getenv("VAD_RECORDER_CHUNK_SIZE", 512)),
     "channels": int(os.getenv("VAD_RECORDER_CHANNELS", 1)),
     "silence_threshold_ms": int(os.getenv("VAD_SILENCE_THRESHOLD_MS", 500)),
-    "max_recording_seconds": int(os.getenv("VAD_MAX_RECORDING_SECONDS", 5)),
+    "max_recording_seconds": int(os.getenv("VAD_MAX_RECORDING_SECONDS", 30)),
     "output_directory": Path(os.getenv("VAD_RECORDING_OUTPUT_DIR", "03_audio_service/audio_service/data/recordings"))
 }
 

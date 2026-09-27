@@ -7,13 +7,13 @@ Handles: audio upload, transcription, LLM, TTS, playback as single operations.
 """
 
 import logging
-import asyncio
 import os
+import asyncio
 from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File
 from shared.jwt_manager import require_user_ownership
-from shared.security import require_internal_service
+from shared.security import auth_enforcement_enabled, require_internal_service, trusted_internal_user
 from pydantic import BaseModel
 from audio_service.services.conversation_state import ConversationState
 
@@ -70,6 +70,11 @@ async def start_playback(
     result = await asyncio.to_thread(playback_manager.play_audio_bytes, await file.read())
     if not result.get("success"):
         raise HTTPException(status_code=503, detail=result.get("error", "Playback failed"))
+    # Playback is synchronous in the manager; allow the room/device tail to decay
+    # before the next microphone lease is exercised.
+    echo_guard_seconds = max(0.0, min(float(os.getenv("AUDIO_ECHO_GUARD_SECONDS", "0.75")), 3.0))
+    await asyncio.sleep(echo_guard_seconds)
+    logger.debug("Audio echo guard elapsed: %.3fs", echo_guard_seconds)
     return result
 
 
@@ -237,7 +242,9 @@ async def end_continuous_conversation(user_id: str, request: Request):
     Returns:
         Session termination status
     """
-    require_user_ownership(request, user_id)
+    trusted_user = trusted_internal_user(request)
+    if not (auth_enforcement_enabled() and trusted_user == user_id):
+        require_user_ownership(request, user_id)
     from main import conversation_state_manager, stop_word_detector
     
     if not conversation_state_manager:

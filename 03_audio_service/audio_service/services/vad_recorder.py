@@ -10,6 +10,7 @@ Features:
 """
 
 import logging
+import math
 import numpy as np
 import pyaudio
 import wave
@@ -34,7 +35,7 @@ class VADRecorder:
         chunk_size: Audio chunk size in samples (512 default)
         channels: Number of audio channels (1 = mono)
         silence_threshold_ms: Duration of silence to stop recording (500ms default)
-        max_recording_seconds: Maximum recording time safety limit (5 seconds default for normal conversation)
+        max_recording_seconds: Maximum recording safety backstop
         audio_buffer: List to store recorded audio chunks
         output_directory: Directory for saving WAV files
     """
@@ -44,7 +45,7 @@ class VADRecorder:
         sample_rate: int = 16000,
         chunk_size: int = 512,
         silence_threshold_ms: int = 500,
-        max_duration_seconds: int = 5
+        max_duration_seconds: int = 30
     ):
         """
         Initialize VAD recorder.
@@ -53,13 +54,18 @@ class VADRecorder:
             sample_rate: Audio sample rate in Hz (default 16000)
             chunk_size: Samples per chunk (default 512)
             silence_threshold_ms: Duration of silence to trigger stop (default 500ms)
-            max_duration_seconds: Maximum recording duration for safety (default 5s for normal queries)
+            max_duration_seconds: Maximum recording duration safety backstop (default 30s)
         """
         self.sample_rate = sample_rate
-        self.chunk_size = chunk_size
+        # WebRTC VAD accepts exact 10/20/30 ms PCM frames. Normalize legacy
+        # 512-sample (32 ms) configuration to a supported 30 ms frame.
+        requested_ms = round(chunk_size * 1000 / sample_rate)
+        self.chunk_size = chunk_size if requested_ms in {10, 20, 30} else sample_rate * 30 // 1000
         self.channels = 1  # Mono
         self.silence_threshold_ms = silence_threshold_ms
-        self.max_recording_seconds = max_duration_seconds
+        self.max_recording_seconds = max(1, max_duration_seconds)
+        self.start_speech_frames = 3  # 90 ms at the 30 ms frame cadence rejects isolated blips.
+        self.minimum_speech_seconds = 1.0  # Existing speaker verification minimum.
         self.audio_buffer = []
         self.output_directory = VAD_RECORDER_CONFIG["output_directory"]
         
@@ -89,7 +95,7 @@ class VADRecorder:
                 "audio_file": str (path to saved WAV file),
                 "duration": float (recording duration in seconds),
                 "chunks_recorded": int (number of audio chunks),
-                "stopped_by": str ("silence" or "max_duration"),
+        "stopped_by": str ("speech_end", "no_speech", "safety_timeout", or "cancelled"),
                 "sample_rate": int,
                 "success": bool
             }
@@ -129,14 +135,17 @@ class VADRecorder:
             # Initialize recording variables
             self.audio_buffer = []
             consecutive_silence_chunks = 0
+            consecutive_speech_chunks = 0
+            speech_chunks = 0
             chunks_recorded = 0
-            stopped_by = "unknown"
+            stopped_by = "safety_timeout"
+            pending_speech = []
             
             # Calculate silence threshold in chunks
             # silence_threshold_ms / (chunk_size_ms) = silence_threshold_chunks
             # chunk_size_ms = (chunk_size / sample_rate) * 1000
             chunk_duration_ms = (self.chunk_size / self.sample_rate) * 1000
-            silence_threshold_chunks = int(self.silence_threshold_ms / chunk_duration_ms)
+            silence_threshold_chunks = max(1, math.ceil(self.silence_threshold_ms / chunk_duration_ms))
             
             # Calculate maximum chunks for safety
             max_chunks = int(self.max_recording_seconds * (self.sample_rate / self.chunk_size))
@@ -164,14 +173,12 @@ class VADRecorder:
                     # Convert to numpy array
                     audio_array = np.frombuffer(audio_chunk, dtype=np.int16).astype(np.float32)
                     
-                    # Store chunk
-                    self.audio_buffer.append(audio_chunk)
                     chunks_recorded += 1
                     
                     # Check for speech using VAD
                     # CRITICAL FIX: VAD returns (is_speech: bool, metadata: dict) tuple
                     try:
-                        vad_result = self.vad_instance.is_speech(audio_array)
+                        vad_result = self.vad_instance.is_speech(audio_array, use_webrtc=True)
                         # Properly unpack the tuple returned by VAD method
                         if isinstance(vad_result, tuple):
                             is_speech, vad_metadata = vad_result
@@ -183,18 +190,24 @@ class VADRecorder:
                         is_speech = False
                     
                     if is_speech:
-                        # Speech detected - reset silence counter
-                        if consecutive_silence_chunks > 0:
-                            logger.debug(f"Speech detected after {consecutive_silence_chunks} silence chunks")
+                        consecutive_speech_chunks += 1
                         consecutive_silence_chunks = 0
-                        inside_speech_region = True
-                        logger.debug(f"Speech detected (chunk {chunks_recorded})")
+                        if not inside_speech_region:
+                            pending_speech.append(audio_chunk)
+                            if consecutive_speech_chunks >= self.start_speech_frames:
+                                inside_speech_region = True
+                                self.audio_buffer.extend(pending_speech)
+                                speech_chunks += len(pending_speech)
+                                pending_speech.clear()
+                        else:
+                            self.audio_buffer.append(audio_chunk)
+                            speech_chunks += 1
                     
                     else:
-                        # Silence detected - increment counter PROPERLY
+                        consecutive_speech_chunks = 0
                         if inside_speech_region:
-                            # We were in speech, now in silence - increment counter
                             consecutive_silence_chunks += 1
+                            self.audio_buffer.append(audio_chunk)
                             
                             if consecutive_silence_chunks <= 3:  # Log first few silence chunks only
                                 logger.debug(
@@ -208,19 +221,26 @@ class VADRecorder:
                                     f"Silence threshold reached after {chunks_recorded} chunks "
                                     f"({consecutive_silence_chunks} silent chunks)"
                                 )
-                                stopped_by = "silence"
+                                stopped_by = (
+                                    "speech_end"
+                                    if speech_chunks * self.chunk_size / self.sample_rate >= self.minimum_speech_seconds
+                                    else "no_speech"
+                                )
                                 break
-                        else:
-                            # Still waiting for initial speech
-                            logger.debug("Waiting for initial speech...")
+                        elif not inside_speech_region:
+                            pending_speech.clear()
                 
                 except IOError as e:
                     logger.error(f"Audio stream error: {e}")
                     raise
             
             # Check if reached max duration
-            if chunks_recorded >= max_chunks and stopped_by == "unknown":
-                stopped_by = "max_duration"
+            if stop_event is not None and stop_event.is_set():
+                stopped_by = "cancelled"
+            elif chunks_recorded >= max_chunks and not inside_speech_region:
+                stopped_by = "no_speech"
+            elif chunks_recorded >= max_chunks and inside_speech_region:
+                stopped_by = "safety_timeout"
                 logger.info(f"Maximum recording duration ({self.max_recording_seconds}s) reached")
             
             # Close audio stream
@@ -230,16 +250,18 @@ class VADRecorder:
             
             # Save WAV file
             logger.info(f"Saving recording to: {output_path}")
-            self._save_wav_file(output_path)
+            if self.audio_buffer:
+                self._save_wav_file(output_path)
             
             # Calculate actual duration
             actual_duration = len(self.audio_buffer) * self.chunk_size / self.sample_rate
             
             result = {
-                "audio_file": output_path,
+                "audio_file": output_path if self.audio_buffer else None,
                 "duration": actual_duration,
                 "chunks_recorded": chunks_recorded,
                 "stopped_by": stopped_by,
+                "end_reason": stopped_by,
                 "sample_rate": self.sample_rate,
                 "success": True
             }

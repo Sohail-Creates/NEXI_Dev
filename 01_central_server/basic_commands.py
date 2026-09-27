@@ -16,6 +16,8 @@ BASIC_COMMAND_RESPONSES = {
     "good evening": "Good evening!",
     "goodbye": "Goodbye!",
     "bye": "Goodbye!",
+    "see you": "Goodbye!",
+    "that's all": "Goodbye!",
     "stop": "Stopping.",
     "thank you": "You're welcome!",
     "thanks": "You're welcome!",

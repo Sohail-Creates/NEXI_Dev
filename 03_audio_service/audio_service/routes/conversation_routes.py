@@ -61,6 +61,7 @@ class RecordUntilSilenceResponse(BaseModel):
     audio_file: Optional[str] = None
     duration: float
     stopped_by: str  # "silence", "max_duration", or "error"
+    end_reason: str
     chunks_recorded: int
     error: Optional[str] = None
 
@@ -225,6 +226,7 @@ async def record_until_silence():
             audio_file=result.get("audio_file"),
             duration=result.get("duration", 0),
             stopped_by=result.get("stopped_by", "error"),
+            end_reason=result.get("end_reason", result.get("stopped_by", "error")),
             chunks_recorded=result.get("chunks_recorded", 0),
             error=result.get("error")
         )
@@ -292,6 +294,15 @@ async def record_until_silence_audio(
 
         if not result.get("success"):
             raise HTTPException(status_code=503, detail=result.get("error", "Recording failed"))
+        end_reason = result.get("end_reason", result.get("stopped_by", "unknown"))
+        if end_reason in {"no_speech", "cancelled"}:
+            return Response(
+                status_code=204,
+                headers={
+                    "X-NEXI-Recording-End-Reason": end_reason,
+                    "X-NEXI-Recording-Duration": str(result.get("duration", 0)),
+                },
+            )
         audio = await asyncio.to_thread(Path(temp_path).read_bytes)
         if not audio.startswith(b"RIFF") or b"WAVE" not in audio[:16]:
             raise HTTPException(status_code=500, detail="Recorder returned an invalid WAV payload")
@@ -301,7 +312,8 @@ async def record_until_silence_audio(
             media_type="audio/wav",
             headers={
                 "X-NEXI-Recording-Duration": str(result.get("duration", 0)),
-                "X-NEXI-Recording-Stop-Reason": str(result.get("stopped_by", "unknown")),
+                "X-NEXI-Recording-Stop-Reason": str(end_reason),
+                "X-NEXI-Recording-End-Reason": str(end_reason),
                 "X-NEXI-Recording-Chunks": str(result.get("chunks_recorded", 0)),
             },
         )

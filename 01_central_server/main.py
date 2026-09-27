@@ -22,6 +22,7 @@ from routes.conversations_routes import router as conversations_router
 from camera_routes import router as camera_router, call_router
 from teachme_routes import router as teachme_router
 from restricted_rag import router as restricted_rag_router
+from restricted_rag import rag_session_eviction_loop
 from resource_routes import router as resource_router
 from teachme_connector import init_teachme_connector
 from service_config import get_config
@@ -106,9 +107,17 @@ def create_app() -> FastAPI:
         except Exception as e:
             print(f"Warning: TeachMe connector failed to initialize: {e}")
         app.state.cloud_sync_service.start()
+        app.state.rag_session_eviction_task = asyncio.create_task(rag_session_eviction_loop())
 
     @app.on_event("shutdown")
     async def shutdown_event():
+        task = getattr(app.state, "rag_session_eviction_task", None)
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
         await app.state.cloud_sync_service.stop()
 
 

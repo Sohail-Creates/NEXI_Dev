@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import asyncio
+import importlib.util
 import sqlite3
 import subprocess
 import sys
@@ -15,6 +17,7 @@ from types import MethodType
 from contextlib import closing
 
 import httpx
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
@@ -38,8 +41,10 @@ if str(CENTRAL_DIR) not in sys.path:
 from basic_commands import BASIC_COMMAND_RESPONSES
 from restricted_rag import (
     NonEnglishQueryError,
+    NoSpeechDetected,
     RAGQueryRequest,
     RestrictedRAGPipeline,
+    normalize_retrieval_query,
     _retrieval_terms,
     is_grounded,
 )
@@ -180,6 +185,52 @@ async def test_a_real_http_learn_then_search(monkeypatch):
                 body = await connector.search_by_embedding(
                     "What fruit does NEXI like?", k=3, threshold=0.25
                 )
+                class HometownGroundedLLM:
+                    async def generate_response(self, _prompt, **_kwargs):
+                        return True, {"response": "Your hometown is Layyah, Punjab, Pakistan."}
+
+                hometown = {
+                    "subject": "My hometown",
+                    "predicate": "is Layyah",
+                    "object": "punjab, pakistan",
+                    "context": {"fixture": True},
+                }
+                await connector.learn_item(
+                    "fact", hometown, tags=["phase4-fixture"], confidence=1.0,
+                )
+                hometown_queries = (
+                    "Do you know anything about my hometown?",
+                    "Where is my home?",
+                    "Tell me about my hometown. Tell me about Laiya.",
+                )
+                for query in hometown_queries:
+                    before = await connector.search_by_embedding(query, k=3, threshold=0.0)
+                    before_score = max(
+                        (float(item["similarity"]) for item in before.get("results", [])
+                         if item.get("data", {}).get("subject") == "My hometown"),
+                        default=0.0,
+                    )
+                    after = await connector.search_by_embedding(
+                        normalize_retrieval_query(query), k=3, threshold=0.0
+                    )
+                    after_score = max(
+                        (float(item["similarity"]) for item in after.get("results", [])
+                         if item.get("data", {}).get("subject") == "My hometown"),
+                        default=0.0,
+                    )
+                    rag_result = await RestrictedRAGPipeline(
+                        connector, HometownGroundedLLM()
+                    ).answer(query)
+                    assert rag_result.source == "teachme_grounded"
+                    assert rag_result.best_similarity is not None
+                    assert rag_result.best_similarity >= after_score - 0.0001
+                    print(
+                        f"LIVE_TEACHME_RAG query={query!r} "
+                        f"before_similarity={before_score:.4f} "
+                        f"normalized={normalize_retrieval_query(query)!r} "
+                        f"after_similarity={rag_result.best_similarity:.4f} "
+                        f"source={rag_result.source}"
+                    )
             finally:
                 await connector.close_session()
             print(f"CENTRAL_CONNECTOR LEARN {learned}")
@@ -253,7 +304,7 @@ async def test_c_genuine_no_match_never_calls_llm():
     print(f"CALL_COUNTS teachme={teachme.calls} llm={llm.calls}")
     assert result.source == "no_match"
     assert result.response == "I don't know this yet. Please teach me."
-    assert teachme.queries == ["orbital period neptune"]
+    assert teachme.queries == [fixture_query]
     assert teachme.calls == 1
     assert llm.calls == 0
 
@@ -289,7 +340,7 @@ async def test_near_threshold_match_retrieves_by_content_terms_and_reports_groun
     class HometownTeachMe:
         async def search_by_embedding(self, **kwargs):
             assert kwargs["threshold"] < 0.55
-            assert kwargs["query"] == "hometown"
+            assert kwargs["query"] == normalize_retrieval_query(query)
             return {
                 "results": [{
                     "type": "fact",
@@ -323,6 +374,206 @@ async def test_near_threshold_match_retrieves_by_content_terms_and_reports_groun
         f"HOMETOWN_RAG source={result.source} score={result.best_similarity:.4f} "
         f"query_terms={list(result.retrieval_terms)} response={result.response!r}"
     )
+
+
+async def test_full_sentence_is_embedded_and_punctuation_is_no_speech():
+    class QuerySpy:
+        query = None
+
+        async def search_by_embedding(self, **kwargs):
+            self.query = kwargs["query"]
+            return {"results": []}
+
+    teachme = QuerySpy()
+    result = await RestrictedRAGPipeline(teachme, _CallSpy()).answer("Where is my home?")
+    assert result.source == "no_match"
+    assert teachme.query == "where is my hometown?"
+    try:
+        await RestrictedRAGPipeline(teachme, _CallSpy()).answer("...?!")
+        raise AssertionError("Punctuation-only input was not rejected as no speech")
+    except NoSpeechDetected:
+        pass
+
+
+def test_query_normalization_keeps_semantic_phrases_and_fixes_reported_hometown_phrasings():
+    phrases = {
+        "Do you know anything about my hometown?": "my hometown?",
+        "Where is my home?": "where is my hometown?",
+        "Tell me about my hometown. Tell me about Laiya.": "my hometown. Laiya.",
+    }
+    for query, expected in phrases.items():
+        normalized = normalize_retrieval_query(query)
+        print(f"RAG_QUERY_NORMALIZATION {query!r} -> {normalized!r}")
+        assert normalized == expected
+        assert len(_retrieval_terms(normalized)) > 0
+
+
+async def test_short_reported_english_phrase_is_not_false_rejected():
+    from restricted_rag import require_english
+    from langdetect import detect_langs
+
+    phrase = "I'm going to die"
+    detected = detect_langs(phrase)[0]
+    require_english(phrase)
+    teachme = _EmptyTeachMe()
+    result = await RestrictedRAGPipeline(teachme, _CallSpy()).answer(phrase)
+    assert result.source == "no_match"
+    assert teachme.calls == 1
+    print(
+        f"SHORT_ENGLISH_ACCEPTED {phrase!r} detector={detected.lang} "
+        f"confidence={detected.prob:.4f} reached_retrieval={teachme.calls == 1}"
+    )
+
+
+async def test_session_resolves_pronoun_to_last_grounded_subject():
+    from restricted_rag import (
+        RAGResult, RAGSession, _rag_sessions, _update_session_entity,
+        _resolve_session_query,
+    )
+
+    state = RAGSession("fixture-user", True, None, 0.0)
+    _update_session_entity(
+        state,
+        RAGResult("Layyah, Punjab, Pakistan", "teachme_grounded", resolved_entity="My hometown"),
+    )
+    _rag_sessions["fixture-session"] = state
+    resolved, same_state = _resolve_session_query("fixture-session", "fixture-user", "Where is it?")
+    assert same_state.last_entity == "My hometown"
+    assert resolved == "Where is My hometown?"
+    _rag_sessions.pop("fixture-session", None)
+
+
+def test_rag_idle_session_eviction_is_ttl_based(monkeypatch):
+    import restricted_rag
+
+    monkeypatch.setattr(restricted_rag, "RAG_SESSION_IDLE_SECONDS", 5.0)
+    restricted_rag._rag_sessions["expired-fixture"] = restricted_rag.RAGSession(
+        "fixture-user", True, "My hometown", 10.0, 2
+    )
+    assert restricted_rag.evict_idle_rag_sessions(now=16.0) == 1
+    assert "expired-fixture" not in restricted_rag._rag_sessions
+    assert ("expired-fixture", "fixture-user") in restricted_rag._expired_rag_sessions
+    restricted_rag._expired_rag_sessions.remove(("expired-fixture", "fixture-user"))
+
+
+def test_central_session_is_created_unverified_then_bound_to_voice_identity():
+    from restricted_rag import _rag_sessions, create_rag_session, verify_rag_session
+
+    session_id, state = create_rag_session()
+    try:
+        assert state.user_id is None
+        assert state.verified is False
+        assert session_id in _rag_sessions
+        verified = verify_rag_session(session_id, "fixture-user")
+        assert verified.user_id == "fixture-user"
+        assert verified.verified is True
+        print(f"CENTRAL_SESSION_CREATED_AT_START verified={verified.verified} user_bound=True")
+    finally:
+        _rag_sessions.pop(session_id, None)
+
+
+def test_manual_session_routes_and_configured_farewells(monkeypatch):
+    from fastapi import FastAPI
+    import restricted_rag
+    from shared.security import require_internal_service
+
+    app = FastAPI()
+    app.include_router(restricted_rag.router)
+    app.dependency_overrides[require_internal_service] = lambda: "fixture-service"
+    monkeypatch.setattr(restricted_rag, "require_session_claims", lambda _request: {"sub": "fixture-user"})
+    monkeypatch.setattr(restricted_rag, "get_teachme_connector", lambda: object())
+    try:
+        with TestClient(app) as client:
+            for phrase in ("bye", "goodbye", "see you", "that's all", "stop"):
+                created = client.post("/api/v1/rag/sessions")
+                assert created.status_code == 201
+                session_id = created.json()["session_id"]
+                assert created.json()["verified"] is False
+                bound = client.post(f"/api/v1/rag/sessions/{session_id}/verify")
+                assert bound.status_code == 200
+                response = client.post(
+                    "/api/v1/rag/query",
+                    json={"query": phrase, "session_id": session_id},
+                )
+                assert response.status_code == 200, response.text
+                assert response.json()["source"] == "basic_command"
+                assert response.headers["x-nexi-session-ended"] == "true"
+                assert session_id not in restricted_rag._rag_sessions
+                print(f"CENTRAL_FAREWELL {phrase!r} source=basic_command ended=true")
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_space_cancels_in_flight_manual_http_request(monkeypatch):
+    import threading
+    import sys
+
+    harness_path = ROOT / "test.py"
+    spec = importlib.util.spec_from_file_location("manual_console_for_test", harness_path)
+    assert spec is not None and spec.loader is not None
+    manual_harness = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = manual_harness
+    spec.loader.exec_module(manual_harness)
+
+    transport_cancelled = threading.Event()
+
+    class WaitingAsyncClient:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def request(self, *_args, **_kwargs):
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                transport_cancelled.set()
+                raise
+
+    monkeypatch.setattr(manual_harness.httpx, "AsyncClient", WaitingAsyncClient)
+    monkeypatch.setattr(manual_harness, "_ca_verification", lambda: "fixture-ca")
+    client = object.__new__(manual_harness.LiveRESTClient)
+    client.urls = manual_harness.ServiceURLs()
+    client.internal_token = "fixture-token"
+    stopped = threading.Event()
+    threading.Timer(0.1, stopped.set).start()
+    with pytest.raises(manual_harness.ManualRequestCancelled):
+        client.request_cancellable(
+            "central", "POST", "/api/v1/rag/query", cancel_event=stopped,
+        )
+    assert transport_cancelled.is_set()
+    print("MANUAL_HTTP_CANCEL client_request_task=cancelled before_response=true")
+
+
+async def test_central_rag_cancels_upstream_task_after_client_disconnect():
+    from restricted_rag import _answer_while_connected
+
+    class SlowPipeline:
+        cancelled = False
+
+        async def answer(self, *_args, **_kwargs):
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+
+    class DisconnectedRequest:
+        checks = 0
+
+        async def is_disconnected(self):
+            self.checks += 1
+            return self.checks > 1
+
+    pipeline = SlowPipeline()
+    with pytest.raises(asyncio.CancelledError):
+        await _answer_while_connected(pipeline, "cancel this query", "fixture-user", DisconnectedRequest())
+    assert pipeline.cancelled
+    print("CENTRAL_RAG_CANCEL client_disconnect=observed upstream_task=cancelled")
 
 
 async def test_d_server_prompt_extra_field_rejection_and_english_gate():
