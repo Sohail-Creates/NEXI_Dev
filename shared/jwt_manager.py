@@ -473,6 +473,22 @@ def require_session_claims(request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=401, detail="Invalid or expired session token") from exc
 
 
+def require_bearer_session_claims(request: Request) -> Dict[str, Any]:
+    """Validate end-user identity from bearer claims, even on an internal call.
+
+    Use when the service credential authorizes the caller, but the operation
+    must bind its result to the end-user token rather than a caller-supplied
+    trusted-user header.
+    """
+    try:
+        token = bearer_token_from_request(request)
+        return get_token_validator().validate_session_token(token)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Invalid or expired session token") from exc
+
+
 def require_user_ownership(request: Request, user_id: str) -> Dict[str, Any]:
     from shared.security import auth_enforcement_enabled
     if not auth_enforcement_enabled():

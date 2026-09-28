@@ -473,17 +473,35 @@ def test_central_session_is_created_only_for_verified_bearer_identity():
 def test_manual_session_routes_and_configured_farewells(monkeypatch):
     from fastapi import FastAPI
     import restricted_rag
+    import shared.jwt_manager as jwt_manager
+    from shared.jwt_manager import JWTManager, TokenConfig
     from shared.security import require_internal_service
 
     app = FastAPI()
     app.include_router(restricted_rag.router)
     app.dependency_overrides[require_internal_service] = lambda: "fixture-service"
-    monkeypatch.setattr(restricted_rag, "require_session_claims", lambda _request: {"sub": "fixture-user"})
+    manager = JWTManager(TokenConfig(secret_key="phase4-session-secret-with-sufficient-length"))
+    session_token = manager.create_session_token("fixture-user")["token"]
+    monkeypatch.setattr(jwt_manager, "get_jwt_manager", lambda: manager)
     monkeypatch.setattr(restricted_rag, "get_teachme_connector", lambda: object())
     try:
         with TestClient(app) as client:
+            invalid = client.post(
+                "/api/v1/rag/sessions",
+                headers={
+                    "Authorization": "Bearer invalid-session-token",
+                    "X-NEXI-Trusted-User-ID": "fixture-user",
+                },
+            )
+            assert invalid.status_code == 401
             for phrase in ("bye", "goodbye", "see you", "that's all", "stop"):
-                created = client.post("/api/v1/rag/sessions", headers={"Authorization": "Bearer fixture-token"})
+                created = client.post(
+                    "/api/v1/rag/sessions",
+                    headers={
+                        "Authorization": f"Bearer {session_token}",
+                        "X-NEXI-Trusted-User-ID": "untrusted-conflicting-user",
+                    },
+                )
                 assert created.status_code == 201
                 session_id = created.json()["session_id"]
                 assert created.json()["verified"] is True
@@ -491,6 +509,7 @@ def test_manual_session_routes_and_configured_farewells(monkeypatch):
                 response = client.post(
                     "/api/v1/rag/query",
                     json={"query": phrase, "session_id": session_id},
+                    headers={"Authorization": f"Bearer {session_token}"},
                 )
                 assert response.status_code == 200, response.text
                 assert response.json()["source"] == "basic_command"
@@ -644,6 +663,7 @@ def test_space_cancels_in_flight_manual_http_request(monkeypatch):
     monkeypatch.setattr(manual_harness, "_ca_verification", lambda: "fixture-ca")
     client = object.__new__(manual_harness.LiveRESTClient)
     client.urls = manual_harness.ServiceURLs()
+    client.output_mode = "narrative"
     client.internal_token = "fixture-token"
     stopped = threading.Event()
     threading.Timer(0.1, stopped.set).start()
@@ -674,6 +694,125 @@ def test_live_rest_request_methods_keep_keyword_signatures_in_sync():
         f"{cancellable_parameters - request_parameters}"
     )
     print(f"LIVE_REST_SIGNATURE_GUARD PASS parameters={sorted(request_parameters)}")
+
+
+@pytest.mark.parametrize("mode", ["narrative", "trace", "debug"])
+def test_live_rest_output_modes_keep_payload_and_redact_credentials(mode, capsys):
+    import sys
+    from types import SimpleNamespace
+
+    harness_path = ROOT / "test.py"
+    spec = importlib.util.spec_from_file_location("live_rest_output_modes", harness_path)
+    assert spec is not None and spec.loader is not None
+    harness = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = harness
+    spec.loader.exec_module(harness)
+
+    class FakeTransport:
+        def __init__(self):
+            self.args = None
+
+        def request(self, *args, **kwargs):
+            self.args = (args, kwargs)
+            return httpx.Response(
+                200,
+                json={"status": "healthy", "service": "central_server"},
+                request=httpx.Request(args[0], args[1]),
+            )
+
+    client = object.__new__(harness.LiveRESTClient)
+    client.urls = SimpleNamespace(by_name=lambda _service: "https://central.test")
+    client.output_mode = mode
+    client.internal_token = "test-service-secret"
+    client._client = FakeTransport()
+    payload = {"query": "Which room is upstairs?"}
+    result = client.request(
+        "central", "POST", "/api/v1/rag/query", internal=True,
+        json_body=payload,
+    )
+    captured = capsys.readouterr().out
+    assert result.status_code == 200
+    args, kwargs = client._client.args
+    assert args == ("POST", "https://central.test/api/v1/rag/query")
+    assert kwargs["json"] == payload
+    assert kwargs["headers"][harness.SERVICE_TOKEN_HEADER] == "test-service-secret"
+    if mode == "narrative":
+        assert "Restricted RAG query completed successfully (HTTP 200)." in captured
+        assert "REQUEST" not in captured and "RESPONSE" not in captured
+        assert "https://" not in captured and "<redacted>" not in captured
+    elif mode == "trace":
+        assert captured.count("\n") == 1
+        assert "[Central] POST /api/v1/rag/query -> 200" in captured
+        assert "https://" not in captured and "REQUEST" not in captured
+    else:
+        assert "REQUEST" in captured and "RESPONSE" in captured
+        assert "test-service-secret" not in captured
+        assert "<redacted>" in captured
+
+
+@pytest.mark.parametrize("mode", ["narrative", "trace", "debug"])
+def test_live_rest_failures_are_visible_in_every_output_mode(mode, capsys):
+    import sys
+    from types import SimpleNamespace
+
+    harness_path = ROOT / "test.py"
+    spec = importlib.util.spec_from_file_location("live_rest_output_failures", harness_path)
+    assert spec is not None and spec.loader is not None
+    harness = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = harness
+    spec.loader.exec_module(harness)
+
+    class FakeTransport:
+        def request(self, *args, **kwargs):
+            return httpx.Response(
+                403,
+                json={"status_code": 403, "code": "FORBIDDEN", "message": "Session required"},
+                request=httpx.Request(args[0], args[1]),
+            )
+
+    client = object.__new__(harness.LiveRESTClient)
+    client.urls = SimpleNamespace(by_name=lambda _service: "https://central.test")
+    client.output_mode = mode
+    client.internal_token = ""
+    client._client = FakeTransport()
+    result = client.request("central", "GET", "/users/private", display=False)
+    captured = capsys.readouterr().out
+    assert result.status_code == 403
+    assert "FORBIDDEN" in captured and "Session required" in captured
+    if mode == "narrative":
+        assert "--output debug" in captured
+        assert "https://" not in captured and "RESPONSE" not in captured
+    elif mode == "trace":
+        assert captured.count("\n") == 1
+        assert "-> 403" in captured
+    else:
+        assert "RESPONSE" in captured
+
+
+def test_speaker_verification_narrative_reports_score_and_threshold(capsys):
+    import sys
+    from types import SimpleNamespace
+
+    harness_path = ROOT / "test.py"
+    spec = importlib.util.spec_from_file_location("live_rest_speaker_summary", harness_path)
+    assert spec is not None and spec.loader is not None
+    harness = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = harness
+    spec.loader.exec_module(harness)
+    client = object.__new__(harness.LiveRESTClient)
+    client.output_mode = "narrative"
+    client._report_narrative(
+        "audio", "POST", "/api/v1/verify-speaker",
+        harness.LiveResponse(
+            200, {},
+            {"is_verified": False, "user_id": "unknown", "confidence": 0.0, "threshold": 0.65},
+            b"",
+        ),
+    )
+    captured = capsys.readouterr().out
+    assert "Speaker not recognized (confidence 0.00; threshold 0.65)." in captured
+    assert "Please enroll or re-enroll this speaker." in captured
+    assert captured.index("confidence 0.00") < captured.index("Please enroll")
 
 
 def test_console_reports_unexpected_menu_exception_and_returns_to_menu(monkeypatch, capsys):

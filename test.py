@@ -30,6 +30,7 @@ load_dotenv(ROOT / ".env", override=False)
 SERVICE_TOKEN_HEADER = "X-NEXI-Service-Token"
 CORRELATION_HEADER = "X-Correlation-ID"
 DEFAULT_TIMEOUT_SECONDS = float(os.getenv("NEXI_HARNESS_TIMEOUT", "90"))
+CONSOLE_OUTPUT_MODES = ("narrative", "trace", "debug")
 
 
 def _service_url(environment_name: str, port: int) -> str:
@@ -123,6 +124,43 @@ def _response_message(body: Any, default: str) -> str:
     if isinstance(error, Mapping):
         return str(error.get("message") or default)
     return str(body.get("message") or body.get("detail") or default)
+
+
+def _error_details(body: Any, status_code: int) -> tuple[str, str]:
+    """Read the shared error envelope without exposing raw response bodies."""
+    if isinstance(body, Mapping):
+        error = body.get("error")
+        envelope = error if isinstance(error, Mapping) else body
+        code = str(envelope.get("code") or envelope.get("error_code") or "HTTP_ERROR")
+        message = str(envelope.get("message") or envelope.get("detail") or "Request failed")
+        message = " ".join(message.split())
+        return code, message
+    return "HTTP_ERROR", f"Request failed with HTTP status {status_code}"
+
+
+def _operation_name(path: str) -> str:
+    """Convert a route path to a short, human-readable operation label."""
+    normalized = path.rstrip("/").lower()
+    known = {
+        "/health": "Health check",
+        "/api/v1/health": "Health check",
+        "/api/v1/record-until-silence/audio": "Audio recording",
+        "/api/v1/verify-speaker": "Speaker verification",
+        "/api/v1/transcribe": "Speech transcription",
+        "/api/v1/rag/query": "Restricted RAG query",
+        "/speak": "Speech synthesis",
+        "/enrollment/enroll": "User enrollment",
+        "/knowledge/facts": "Fact list",
+        "/knowledge/objects": "Object list",
+        "/users/list": "Enrolled-user list",
+        "/resources/status": "Resource status",
+        "/camera/status": "Camera status",
+        "/sync/status": "Cloud-sync status",
+    }
+    if normalized in known:
+        return known[normalized]
+    leaf = normalized.rsplit("/", 1)[-1].replace("-", " ").replace("_", " ")
+    return leaf[:1].upper() + leaf[1:] if leaf else "Service request"
 
 
 @dataclass
@@ -229,8 +267,14 @@ class SpaceSessionStop:
 class LiveRESTClient:
     """The single networking boundary used by every console action."""
 
-    def __init__(self, urls: ServiceURLs | None = None) -> None:
+    def __init__(self, urls: ServiceURLs | None = None, output_mode: str | None = None) -> None:
         self.urls = urls or ServiceURLs()
+        selected_output = output_mode or os.getenv("NEXI_CONSOLE_OUTPUT", "narrative")
+        if selected_output not in CONSOLE_OUTPUT_MODES:
+            raise ValueError(
+                f"NEXI_CONSOLE_OUTPUT must be one of: {', '.join(CONSOLE_OUTPUT_MODES)}"
+            )
+        self.output_mode = selected_output
         self.internal_token = os.getenv("NEXI_INTERNAL_SERVICE_TOKEN", "").strip()
         self._client = httpx.Client(
             verify=_ca_verification(),
@@ -284,50 +328,151 @@ class LiveRESTClient:
                 {"field": field_name, "filename": value[0]}
                 for field_name, value in iterable
             ]
-        if display:
+        if self.output_mode == "debug":
             print("\nREQUEST")
             print(_print_json(request_summary))
 
-        if cancel_event is None:
-            response = self._client.request(
-                method,
-                url,
-                headers=headers,
-                params=params,
-                json=json_body,
-                data=data,
-                files=files,
-            )
-        else:
-            async def send() -> httpx.Response:
-                async with httpx.AsyncClient(
-                    verify=_ca_verification(),
-                    timeout=httpx.Timeout(DEFAULT_TIMEOUT_SECONDS),
-                    follow_redirects=False,
-                ) as client:
-                    task = asyncio.create_task(client.request(
-                        method, url, headers=headers, params=params, json=json_body,
-                        data=data, files=files,
-                    ))
-                    while not task.done():
+        started_at = time.perf_counter()
+        try:
+            if cancel_event is None:
+                response = self._client.request(
+                    method,
+                    url,
+                    headers=headers,
+                    params=params,
+                    json=json_body,
+                    data=data,
+                    files=files,
+                )
+            else:
+                async def send() -> httpx.Response:
+                    async with httpx.AsyncClient(
+                        verify=_ca_verification(),
+                        timeout=httpx.Timeout(DEFAULT_TIMEOUT_SECONDS),
+                        follow_redirects=False,
+                    ) as client:
+                        task = asyncio.create_task(client.request(
+                            method, url, headers=headers, params=params, json=json_body,
+                            data=data, files=files,
+                        ))
+                        while not task.done():
+                            if cancel_event.is_set():
+                                task.cancel()
+                                try:
+                                    await task
+                                except asyncio.CancelledError:
+                                    pass
+                                raise ManualRequestCancelled("SPACE cancelled the in-flight request")
+                            await asyncio.sleep(0.025)
                         if cancel_event.is_set():
-                            task.cancel()
-                            try:
-                                await task
-                            except asyncio.CancelledError:
-                                pass
                             raise ManualRequestCancelled("SPACE cancelled the in-flight request")
-                        await asyncio.sleep(0.025)
-                    if cancel_event.is_set():
-                        raise ManualRequestCancelled("SPACE cancelled the in-flight request")
-                    return await task
+                        return await task
 
-            response = asyncio.run(send())
+                response = asyncio.run(send())
+        except Exception as exc:
+            elapsed_ms = (time.perf_counter() - started_at) * 1000
+            if isinstance(exc, ManualRequestCancelled):
+                if self.output_mode == "trace":
+                    print(
+                        f"[{service.title()}] {method.upper()} {path} -> CANCELLED "
+                        f"({elapsed_ms:.0f} ms) | SPACE cancelled the request"
+                    )
+                elif self.output_mode == "debug":
+                    print("RESPONSE")
+                    print(_print_json({"status": "cancelled", "message": "SPACE cancelled the request"}))
+                else:
+                    print("Audio request cancelled by SPACE; no response was received.")
+            else:
+                self._report_failure(service, method, path, 0, "TRANSPORT_ERROR", str(exc), elapsed_ms)
+            raise
         result = self._live_response(response)
-        if display:
+        elapsed_ms = (time.perf_counter() - started_at) * 1000
+        if self.output_mode == "debug":
             print("RESPONSE")
             print(_print_json({"status": result.status_code, "body": result.body}))
+            if not result.ok:
+                code, message = _error_details(result.body, result.status_code)
+                self._report_failure(service, method, path, result.status_code, code, message, elapsed_ms)
+        elif self.output_mode == "trace":
+            self._report_trace(service, method, path, result, elapsed_ms)
+        elif not result.ok:
+            code, message = _error_details(result.body, result.status_code)
+            self._report_failure(service, method, path, result.status_code, code, message, elapsed_ms)
+        elif display or path.rstrip("/").endswith("/verify-speaker"):
+            self._report_narrative(service, method, path, result)
         return result
+
+    def _report_trace(
+        self, service: str, method: str, path: str, response: LiveResponse, elapsed_ms: float
+    ) -> None:
+        prefix = f"[{service.title()}] {method.upper()} {path} -> {response.status_code} ({elapsed_ms:.0f} ms)"
+        if not response.ok:
+            code, message = _error_details(response.body, response.status_code)
+            prefix += f" | {code}: {' '.join(message.split())}"
+        print(prefix)
+
+    def _report_failure(
+        self, service: str, method: str, path: str, status_code: int,
+        code: str, message: str, elapsed_ms: float,
+    ) -> None:
+        line = (
+            f"{service.title()} request failed (HTTP {status_code}; {code}): {' '.join(message.split())}."
+        )
+        if self.output_mode == "trace":
+            self._report_trace(
+                service, method, path,
+                LiveResponse(status_code, {}, {"code": code, "message": message}, b""),
+                elapsed_ms,
+            )
+        elif self.output_mode == "narrative":
+            print(line + " (run with --output debug for the full exchange)")
+        else:
+            print(line)
+
+    def _report_narrative(self, service: str, method: str, path: str, response: LiveResponse) -> None:
+        body = response.body if isinstance(response.body, Mapping) else {}
+        if path.rstrip("/").endswith("/verify-speaker"):
+            confidence = body.get("confidence")
+            threshold = body.get("threshold")
+            user_id = body.get("user_id")
+            verified = bool(body.get("is_verified"))
+            confidence_text = f"{float(confidence):.2f}" if confidence is not None else "not reported"
+            threshold_text = f"{float(threshold):.2f}" if threshold is not None else "not reported"
+            if response.ok and verified:
+                print(f"Speaker verified as {user_id} (confidence {confidence_text}; threshold {threshold_text}).")
+            else:
+                message = f"Speaker not recognized (confidence {confidence_text}; threshold {threshold_text})."
+                if confidence is not None and float(confidence) == 0.0:
+                    message += " Please enroll or re-enroll this speaker."
+                print(message)
+            return
+
+        # Manual-mode narration below reports these stages with richer, concise
+        # context (end reason, duration, transcript, RAG source, or playback).
+        if path.endswith("/record-until-silence/audio") or path.endswith("/api/v1/transcribe"):
+            return
+
+        service_name = str(body.get("service") or service).replace("_", " ").replace("-", " ").title()
+        reported_status = str(body.get("status") or "").strip().lower()
+        operation = _operation_name(path)
+        if "health" in path and reported_status:
+            print(f"{service_name} health: {reported_status} (HTTP {response.status_code}).")
+            return
+        if path.endswith("/knowledge/facts") or path.endswith("/knowledge/objects"):
+            kind = "facts" if path.endswith("/facts") else "objects"
+            count = body.get("count")
+            detail = f"{count} {kind}" if count is not None else kind
+            print(f"{operation}: retrieved {detail} (HTTP {response.status_code}).")
+            return
+        if path.endswith("/users/list"):
+            users = body.get("users", [])
+            print(f"{operation}: retrieved {len(users)} enrolled users (HTTP {response.status_code}).")
+            return
+        message = body.get("message")
+        if message:
+            print(f"{operation}: {message} (HTTP {response.status_code}).")
+            return
+        print(f"{operation} completed successfully (HTTP {response.status_code}).")
 
     def request(
         self,
@@ -808,12 +953,10 @@ class Sprint2Console:
     def list_users(self) -> LiveResponse:
         response = self.client.request("central", "GET", "/users/list", internal=True, display=False)
         users = response.body.get("users", []) if isinstance(response.body, Mapping) else []
-        print(f"GET /users/list -> HTTP {response.status_code}; enrolled users: {len(users)}")
+        print(f"Enrolled users: {len(users)}.")
         for user in users:
             if isinstance(user, Mapping):
                 print(f"  {user.get('user_id', '?')}: {user.get('name') or user.get('user_name') or '?'}")
-        if not response.ok:
-            print(_print_json(response.body))
         return response
 
     def delete_user(self, user_name: str) -> LiveResponse:
@@ -916,6 +1059,7 @@ class Sprint2Console:
                 return last_response
 
             def request(service: str, method: str, path: str, **kwargs) -> LiveResponse:
+                kwargs.setdefault("display", False)
                 return self.client.request_cancellable(
                     service, method, path,
                     cancel_event=stopper.requested,
@@ -923,15 +1067,13 @@ class Sprint2Console:
                 )
 
             def report_counts(turn_number: int, previous: Mapping[str, int]) -> None:
+                if self.client.output_mode != "debug":
+                    return
                 current = counts.snapshot()
                 delta = {name: current[name] - previous[name] for name in current}
                 print(
-                    f"Turn {turn_number} calls: "
+                    f"Turn {turn_number} REST calls: "
                     + ", ".join(f"{name}={value}" for name, value in delta.items())
-                )
-                print(
-                    "Session totals: "
-                    + ", ".join(f"{name}={value}" for name, value in current.items())
                 )
 
             first_turn = True
@@ -988,21 +1130,19 @@ class Sprint2Console:
                         break
                     body = verification.body if isinstance(verification.body, Mapping) else {}
                     if not verification.ok or not body.get("is_verified"):
-                        print("User not enrolled - please enroll first")
                         report_counts(turn_number, prior_counts)
                         return verification
                     if not self.session.accept_token(body):
                         raise RuntimeError("Speaker verification succeeded without a session token")
-                    print(
-                        f"Speaker verified as {self.session.user_id} "
-                        f"(confidence {float(body.get('confidence', 0.0)):.2f})."
-                    )
                     created = request(
                         "central", "POST", "/api/v1/rag/sessions",
                         internal=True, bearer=self.session.token, display=False,
                     )
                     last_response = created
-                    if not created.ok or not isinstance(created.body, Mapping) or not created.body.get("session_id"):
+                    if not created.ok:
+                        report_counts(turn_number, prior_counts)
+                        return created
+                    if not isinstance(created.body, Mapping) or not created.body.get("session_id"):
                         print(f"Could not create Central session: {_response_message(created.body, 'unknown error')}")
                         report_counts(turn_number, prior_counts)
                         return created
@@ -1156,7 +1296,8 @@ class Sprint2Console:
                     internal=True,
                     display=False,
                 )
-            print("Conversation session ended.")
+            if conversation_started or rag_session_id:
+                print("Conversation session ended.")
 
     def audio_status(self) -> tuple[LiveResponse, LiveResponse]:
         print("Audio service circuit breaker and orchestration health (not general settings):")
@@ -1237,12 +1378,18 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run the non-interactive seven-service health dashboard and exit",
     )
+    parser.add_argument(
+        "--output",
+        choices=CONSOLE_OUTPUT_MODES,
+        default=None,
+        help="Console output detail (default: NEXI_CONSOLE_OUTPUT or narrative)",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    client = LiveRESTClient()
+    client = LiveRESTClient(output_mode=args.output)
     try:
         console = Sprint2Console(client)
         if args.health:

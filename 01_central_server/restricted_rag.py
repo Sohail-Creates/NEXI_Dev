@@ -15,7 +15,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from shared.jwt_manager import require_session_claims
+from shared.jwt_manager import require_bearer_session_claims, require_session_claims
 from langdetect import DetectorFactory, LangDetectException, detect_langs
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -462,7 +462,7 @@ async def start_rag_session(
     _trusted: str | None = Depends(require_internal_service),
 ):
     """Create a session only from the validated bearer subject after voice verification."""
-    claims = require_session_claims(request)
+    claims = require_bearer_session_claims(request)
     session_id, state = create_rag_session(str(claims["sub"]))
     return {
         "success": True,
