@@ -1,14 +1,3 @@
-"""NEXI Sprint 2 live REST-only manual testing console.
-
-This file is an external client. It deliberately imports no NEXI service
-package, reads no service database, and implements no application policy. Each
-action sends an HTTPS request to an operation published in ``docs/openapi`` and
-prints the actual request metadata and response. Start the seven services with
-the commands in ``commands.txt`` before using the console.
-
-The filename is retained because it is the established operator entry point;
-the former design-reference implementation has been replaced in full.
-"""
 
 from __future__ import annotations
 
@@ -252,12 +241,13 @@ class LiveRESTClient:
     def close(self) -> None:
         self._client.close()
 
-    def request(
+    def _request(
         self,
         service: str,
         method: str,
         path: str,
         *,
+        cancel_event: threading.Event | None = None,
         internal: bool = False,
         bearer: str | None = None,
         params: Mapping[str, Any] | None = None,
@@ -298,20 +288,67 @@ class LiveRESTClient:
             print("\nREQUEST")
             print(_print_json(request_summary))
 
-        response = self._client.request(
-            method,
-            url,
-            headers=headers,
-            params=params,
-            json=json_body,
-            data=data,
-            files=files,
-        )
+        if cancel_event is None:
+            response = self._client.request(
+                method,
+                url,
+                headers=headers,
+                params=params,
+                json=json_body,
+                data=data,
+                files=files,
+            )
+        else:
+            async def send() -> httpx.Response:
+                async with httpx.AsyncClient(
+                    verify=_ca_verification(),
+                    timeout=httpx.Timeout(DEFAULT_TIMEOUT_SECONDS),
+                    follow_redirects=False,
+                ) as client:
+                    task = asyncio.create_task(client.request(
+                        method, url, headers=headers, params=params, json=json_body,
+                        data=data, files=files,
+                    ))
+                    while not task.done():
+                        if cancel_event.is_set():
+                            task.cancel()
+                            try:
+                                await task
+                            except asyncio.CancelledError:
+                                pass
+                            raise ManualRequestCancelled("SPACE cancelled the in-flight request")
+                        await asyncio.sleep(0.025)
+                    if cancel_event.is_set():
+                        raise ManualRequestCancelled("SPACE cancelled the in-flight request")
+                    return await task
+
+            response = asyncio.run(send())
         result = self._live_response(response)
         if display:
             print("RESPONSE")
             print(_print_json({"status": result.status_code, "body": result.body}))
         return result
+
+    def request(
+        self,
+        service: str,
+        method: str,
+        path: str,
+        *,
+        cancel_event: threading.Event | None = None,
+        internal: bool = False,
+        bearer: str | None = None,
+        params: Mapping[str, Any] | None = None,
+        json_body: Any | None = None,
+        data: Mapping[str, Any] | None = None,
+        files: Any | None = None,
+        display: bool = True,
+    ) -> LiveResponse:
+        return self._request(
+            service, method, path, cancel_event=cancel_event, internal=internal,
+            bearer=bearer, params=params, json_body=json_body, data=data,
+            files=files, display=display,
+        )
 
     @staticmethod
     def _live_response(response: httpx.Response) -> LiveResponse:
@@ -338,50 +375,21 @@ class LiveRESTClient:
         method: str,
         path: str,
         *,
-        cancel_event: threading.Event,
+        cancel_event: threading.Event | None = None,
         internal: bool = False,
         bearer: str | None = None,
         params: Mapping[str, Any] | None = None,
         json_body: Any | None = None,
         data: Mapping[str, Any] | None = None,
         files: Any | None = None,
+        display: bool = True,
     ) -> LiveResponse:
-        """Run one manual-mode request with task cancellation on SPACE."""
-        url = f"{self.urls.by_name(service)}{path}"
-        if not url.lower().startswith("https://"):
-            raise RuntimeError(f"Refusing plaintext service URL: {url}")
-        headers = {CORRELATION_HEADER: f"manual-{uuid4().hex}"}
-        if internal:
-            if not self.internal_token:
-                raise RuntimeError("NEXI_INTERNAL_SERVICE_TOKEN is required for this operation")
-            headers[SERVICE_TOKEN_HEADER] = self.internal_token
-        if bearer:
-            headers["Authorization"] = f"Bearer {bearer}"
-
-        async def send() -> LiveResponse:
-            async with httpx.AsyncClient(
-                verify=_ca_verification(),
-                timeout=httpx.Timeout(DEFAULT_TIMEOUT_SECONDS),
-                follow_redirects=False,
-            ) as client:
-                task = asyncio.create_task(client.request(
-                    method, url, headers=headers, params=params, json=json_body,
-                    data=data, files=files,
-                ))
-                while not task.done():
-                    if cancel_event.is_set():
-                        task.cancel()
-                        try:
-                            await task
-                        except asyncio.CancelledError:
-                            pass
-                        raise ManualRequestCancelled("SPACE cancelled the in-flight request")
-                    await asyncio.sleep(0.025)
-                if cancel_event.is_set():
-                    raise ManualRequestCancelled("SPACE cancelled the in-flight request")
-                return self._live_response(await task)
-
-        return asyncio.run(send())
+        """Use the shared request path, optionally aborting the HTTP task on SPACE."""
+        return self._request(
+            service, method, path, cancel_event=cancel_event, internal=internal,
+            bearer=bearer, params=params, json_body=json_body, data=data,
+            files=files, display=display,
+        )
 
 
 @dataclass
@@ -899,19 +907,8 @@ class Sprint2Console:
             )
 
         stopper = SpaceSessionStop(interrupt_audio)
-        created = self.client.request(
-            "central", "POST", "/api/v1/rag/sessions", internal=True, display=False,
-        )
-        if not created.ok or not isinstance(created.body, Mapping) or not created.body.get("session_id"):
-            print(f"Could not start Central session: {_response_message(created.body, 'unknown error')}")
-            return created
-        rag_session_id = str(created.body["session_id"])
-        idle_timeout_seconds = created.body.get("idle_timeout_seconds")
-        print(
-            "Central manual session created at SPACE; idle timeout starts now"
-            + (f" ({idle_timeout_seconds}s)." if idle_timeout_seconds else ".")
-        )
         stopper.start()
+        print("Manual capture ready. No Central session exists until speaker verification succeeds.")
         turn_number = 0
         prior_counts = counts.snapshot()
         try:
@@ -991,7 +988,7 @@ class Sprint2Console:
                         break
                     body = verification.body if isinstance(verification.body, Mapping) else {}
                     if not verification.ok or not body.get("is_verified"):
-                        print("User not enrolled — please enroll first")
+                        print("User not enrolled - please enroll first")
                         report_counts(turn_number, prior_counts)
                         return verification
                     if not self.session.accept_token(body):
@@ -1000,16 +997,22 @@ class Sprint2Console:
                         f"Speaker verified as {self.session.user_id} "
                         f"(confidence {float(body.get('confidence', 0.0)):.2f})."
                     )
-                    session_verification = request(
-                        "central", "POST",
-                        f"/api/v1/rag/sessions/{quote(rag_session_id, safe='')}/verify",
-                        bearer=self.session.token,
+                    created = request(
+                        "central", "POST", "/api/v1/rag/sessions",
+                        internal=True, bearer=self.session.token, display=False,
                     )
-                    last_response = session_verification
-                    if not session_verification.ok:
-                        print("Central could not bind the verified identity to this session.")
+                    last_response = created
+                    if not created.ok or not isinstance(created.body, Mapping) or not created.body.get("session_id"):
+                        print(f"Could not create Central session: {_response_message(created.body, 'unknown error')}")
                         report_counts(turn_number, prior_counts)
-                        return session_verification
+                        return created
+                    rag_session_id = str(created.body["session_id"])
+                    idle_timeout_seconds = created.body.get("idle_timeout_seconds")
+                    print(
+                        f"Central session created for verified user {self.session.user_id}; "
+                        "idle timeout starts now"
+                        + (f" ({idle_timeout_seconds}s)." if idle_timeout_seconds else ".")
+                    )
                     if stopper.requested.is_set():
                         break
                     started = self.client.request(
@@ -1223,8 +1226,8 @@ def _interactive(console: Sprint2Console) -> int:
             continue
         try:
             action()
-        except (httpx.HTTPError, OSError, RuntimeError, ValueError) as exc:
-            print(f"ACTION FAILED: {type(exc).__name__}: {exc}")
+        except Exception as exc:
+            print(f"Action failed: {type(exc).__name__}: {exc}")
 
 
 def _parser() -> argparse.ArgumentParser:

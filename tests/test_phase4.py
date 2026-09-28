@@ -456,18 +456,16 @@ def test_rag_idle_session_eviction_is_ttl_based(monkeypatch):
     restricted_rag._expired_rag_sessions.remove(("expired-fixture", "fixture-user"))
 
 
-def test_central_session_is_created_unverified_then_bound_to_voice_identity():
-    from restricted_rag import _rag_sessions, create_rag_session, verify_rag_session
+def test_central_session_is_created_only_for_verified_bearer_identity():
+    from restricted_rag import _rag_sessions, create_rag_session
 
-    session_id, state = create_rag_session()
+    assert not any(state.user_id == "fixture-user" for state in _rag_sessions.values())
+    session_id, state = create_rag_session("fixture-user")
     try:
-        assert state.user_id is None
-        assert state.verified is False
+        assert state.user_id == "fixture-user"
+        assert state.verified is True
         assert session_id in _rag_sessions
-        verified = verify_rag_session(session_id, "fixture-user")
-        assert verified.user_id == "fixture-user"
-        assert verified.verified is True
-        print(f"CENTRAL_SESSION_CREATED_AT_START verified={verified.verified} user_bound=True")
+        print(f"CENTRAL_SESSION_CREATED_AFTER_VERIFICATION verified={state.verified} user_bound=True")
     finally:
         _rag_sessions.pop(session_id, None)
 
@@ -485,12 +483,11 @@ def test_manual_session_routes_and_configured_farewells(monkeypatch):
     try:
         with TestClient(app) as client:
             for phrase in ("bye", "goodbye", "see you", "that's all", "stop"):
-                created = client.post("/api/v1/rag/sessions")
+                created = client.post("/api/v1/rag/sessions", headers={"Authorization": "Bearer fixture-token"})
                 assert created.status_code == 201
                 session_id = created.json()["session_id"]
-                assert created.json()["verified"] is False
-                bound = client.post(f"/api/v1/rag/sessions/{session_id}/verify")
-                assert bound.status_code == 200
+                assert created.json()["verified"] is True
+                assert created.json()["user_id"] == "fixture-user"
                 response = client.post(
                     "/api/v1/rag/query",
                     json={"query": phrase, "session_id": session_id},
@@ -502,6 +499,115 @@ def test_manual_session_routes_and_configured_farewells(monkeypatch):
                 print(f"CENTRAL_FAREWELL {phrase!r} source=basic_command ended=true")
     finally:
         app.dependency_overrides.clear()
+
+
+def test_retrieval_labeled_hometown_evaluation_with_real_embeddings():
+    import json
+    import math
+    import restricted_rag
+    from shared.semantic_embeddings import embed_text
+
+    cases = json.loads((ROOT / "tests" / "fixtures" / "rag_retrieval_hometown_eval.json").read_text(encoding="utf-8"))
+    assert len([case for case in cases if case["expected"] == "no_match"]) >= 15
+    assert len([case for case in cases if case["expected"] == "match"]) >= 18
+    mandatory = {
+        "Do you know anything about my hometown?",
+        "Where is my home?",
+        "Tell me about my hometown. Tell me about Laiya.",
+    }
+    assert mandatory <= {case["query"] for case in cases}
+
+    old_ratio = restricted_rag.RAG_BAND_QUERY_COVERAGE_RATIO
+    fact_vectors: dict[str, list[float]] = {}
+    result_rows = []
+    try:
+        for case in cases:
+            normalized = restricted_rag.normalize_retrieval_query(case["query"])
+            query_vector = embed_text(normalized)
+            if case["fact"] not in fact_vectors:
+                fact_vectors[case["fact"]] = embed_text(case["fact"])
+            fact_vector = fact_vectors[case["fact"]]
+            similarity = math.fsum(left * right for left, right in zip(query_vector, fact_vector))
+            item = {
+                "type": "fact",
+                "data": {"subject": "My hometown", "predicate": "is", "object": "Layyah punjab pakistan"},
+            }
+            restricted_rag.RAG_BAND_QUERY_COVERAGE_RATIO = 0.5
+            before = similarity >= restricted_rag.RAG_MATCH_THRESHOLD or (
+                similarity >= restricted_rag.RAG_CANDIDATE_THRESHOLD
+                and restricted_rag._has_meaningful_overlap(normalized, item)
+            )
+            restricted_rag.RAG_BAND_QUERY_COVERAGE_RATIO = 1.0
+            after = similarity >= restricted_rag.RAG_MATCH_THRESHOLD or (
+                similarity >= restricted_rag.RAG_CANDIDATE_THRESHOLD
+                and restricted_rag._has_meaningful_overlap(normalized, item)
+            )
+            result_rows.append((case, similarity, before, after, normalized, item))
+    finally:
+        restricted_rag.RAG_BAND_QUERY_COVERAGE_RATIO = old_ratio
+
+    expected = [case["expected"] == "match" for case in cases]
+    before_predictions = [row[2] for row in result_rows]
+    after_predictions = [row[3] for row in result_rows]
+
+    def metrics(predictions):
+        tp = sum(want and got for want, got in zip(expected, predictions))
+        fp = sum(not want and got for want, got in zip(expected, predictions))
+        fn = sum(want and not got for want, got in zip(expected, predictions))
+        precision = tp / (tp + fp) if tp + fp else 1.0
+        recall = tp / (tp + fn) if tp + fn else 1.0
+        return tp, fp, fn, precision, recall
+
+    for case, score, before, after, normalized, item in result_rows:
+        if case["expected"] == "no_match":
+            blocking = (
+                "strict_threshold_requires_answerability" if score >= restricted_rag.RAG_MATCH_THRESHOLD
+                else "candidate_threshold" if score < restricted_rag.RAG_CANDIDATE_THRESHOLD
+                else "full_content_term_coverage"
+            )
+            print(
+                f"RAG_EVAL_NEGATIVE query={case['query']!r} score={score:.4f} "
+                f"before={'match' if before else 'no_match'} after={'match' if after else 'no_match'} "
+                f"blocked_by={blocking} content={restricted_rag._retrieval_terms(normalized)}"
+            )
+            if score < restricted_rag.RAG_MATCH_THRESHOLD:
+                assert not after, f"candidate-band negative admitted: {case['query']} ({score:.4f})"
+    for phrase in mandatory:
+        row = next(row for row in result_rows if row[0]["query"] == phrase)
+        print(f"RAG_EVAL_REQUIRED query={phrase!r} score={row[1]:.4f} before={row[2]} after={row[3]}")
+        assert row[3], f"required hometown query did not match: {phrase} score={row[1]:.4f}"
+    misses = [row[0]["query"] for row in result_rows if row[0]["expected"] == "match" and not row[3]]
+    strict_negative_candidates = [
+        row[0]["query"] for row in result_rows
+        if row[0]["expected"] == "no_match" and row[1] >= restricted_rag.RAG_MATCH_THRESHOLD
+    ]
+    print(f"RAG_EVAL_STRICT_NEGATIVES_REQUIRE_LIVE_ANSWERABILITY {strict_negative_candidates!r}")
+    print(f"RAG_EVAL_METRICS before={metrics(before_predictions)} after={metrics(after_predictions)} positive_misses={misses!r}")
+
+
+async def test_not_answerable_marker_maps_to_safe_no_match():
+    import restricted_rag
+
+    item = {
+        "type": "fact",
+        "data": {"subject": "My hometown", "predicate": "is", "object": "Layyah punjab pakistan"},
+        "similarity": 0.57,
+    }
+
+    class CandidateClient:
+        async def search_by_embedding(self, **_kwargs):
+            return {"results": [item]}
+
+    class MarkerClient:
+        async def generate_response(self, *_args, **_kwargs):
+            return True, {"response": f"Context insufficient. {restricted_rag.NOT_ANSWERABLE_MARKER}"}
+
+    result = await restricted_rag.RestrictedRAGPipeline(CandidateClient(), MarkerClient()).answer(
+        "What is the capital of my hometown?", user_id="fixture-user"
+    )
+    assert result.source == "not_answerable"
+    assert result.response == restricted_rag.TEACH_ME_RESPONSE
+    print(f"RAG_ANSWERABILITY source={result.source} response={result.response!r}")
 
 
 def test_space_cancels_in_flight_manual_http_request(monkeypatch):
@@ -547,6 +653,49 @@ def test_space_cancels_in_flight_manual_http_request(monkeypatch):
         )
     assert transport_cancelled.is_set()
     print("MANUAL_HTTP_CANCEL client_request_task=cancelled before_response=true")
+
+
+def test_live_rest_request_methods_keep_keyword_signatures_in_sync():
+    import inspect
+    import sys
+
+    harness_path = ROOT / "test.py"
+    spec = importlib.util.spec_from_file_location("live_rest_signature_guard", harness_path)
+    assert spec is not None and spec.loader is not None
+    harness = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = harness
+    spec.loader.exec_module(harness)
+
+    request_parameters = set(inspect.signature(harness.LiveRESTClient.request).parameters) - {"self"}
+    cancellable_parameters = set(inspect.signature(harness.LiveRESTClient.request_cancellable).parameters) - {"self"}
+    assert request_parameters == cancellable_parameters, (
+        f"REST client keyword signatures diverged: request-only="
+        f"{request_parameters - cancellable_parameters}, cancellable-only="
+        f"{cancellable_parameters - request_parameters}"
+    )
+    print(f"LIVE_REST_SIGNATURE_GUARD PASS parameters={sorted(request_parameters)}")
+
+
+def test_console_reports_unexpected_menu_exception_and_returns_to_menu(monkeypatch, capsys):
+    import sys
+
+    harness_path = ROOT / "test.py"
+    spec = importlib.util.spec_from_file_location("live_console_exception_guard", harness_path)
+    assert spec is not None and spec.loader is not None
+    harness = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = harness
+    spec.loader.exec_module(harness)
+
+    class BrokenDashboard:
+        def health_dashboard(self):
+            raise TypeError("fixture unexpected failure")
+
+    choices = iter(("1", "0"))
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(choices))
+    assert harness._interactive(BrokenDashboard()) == 0
+    output = capsys.readouterr().out
+    assert "Action failed: TypeError: fixture unexpected failure" in output
+    assert output.count("NEXI live REST console") == 2
 
 
 async def test_central_rag_cancels_upstream_task_after_client_disconnect():

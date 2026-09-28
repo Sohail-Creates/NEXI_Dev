@@ -32,7 +32,9 @@ import httpx
 TEACH_ME_RESPONSE = "I don't know this yet. Please teach me."
 RAG_MATCH_THRESHOLD = float(os.getenv("RAG_MATCH_THRESHOLD", "0.55"))
 RAG_CANDIDATE_THRESHOLD = float(os.getenv("RAG_CANDIDATE_THRESHOLD", "0.45"))
+RAG_BAND_QUERY_COVERAGE_RATIO = float(os.getenv("RAG_BAND_QUERY_COVERAGE_RATIO", "1.0"))
 RAG_TOP_K = int(os.getenv("RAG_TOP_K", "3"))
+NOT_ANSWERABLE_MARKER = "[[NEXI_NOT_ANSWERABLE]]"
 RAG_FILLER_PHRASES = tuple(
     phrase.strip().casefold()
     for phrase in os.getenv(
@@ -152,29 +154,14 @@ def _resolve_session_query(
         return resolved, state
 
 
-def create_rag_session() -> tuple[str, RAGSession]:
-    """Create an unverified manual session; idle time starts immediately."""
+def create_rag_session(user_id: str) -> tuple[str, RAGSession]:
+    """Create an identified session from a previously validated bearer subject."""
     now = time.monotonic()
     session_id = uuid.uuid4().hex
-    state = RAGSession(user_id=None, verified=False, last_entity=None, last_activity=now)
+    state = RAGSession(user_id=user_id, verified=True, last_entity=None, last_activity=now)
     with _rag_sessions_lock:
         _rag_sessions[session_id] = state
     return session_id, state
-
-
-def verify_rag_session(session_id: str, user_id: str) -> RAGSession:
-    """Bind a manual session to the bearer identity returned by voice verification."""
-    now = time.monotonic()
-    with _rag_sessions_lock:
-        state = _rag_sessions.get(session_id)
-        if state is None:
-            raise HTTPException(status_code=404, detail={"code": "SESSION_NOT_FOUND", "message": "Session expired or does not exist"})
-        if state.verified and state.user_id != user_id:
-            raise HTTPException(status_code=403, detail={"code": "SESSION_USER_MISMATCH", "message": "Session does not belong to this verified user"})
-        state.user_id = user_id
-        state.verified = True
-        state.last_activity = now
-        return state
 
 
 def normalize_retrieval_query(query: str) -> str:
@@ -247,7 +234,9 @@ def build_grounded_prompt(query: str, matches: list[dict[str, Any]]) -> tuple[st
     fact_block = "\n".join(f"- {fact}" for fact in facts)
     prompt = (
         "Answer the question strictly and only from the facts below. "
-        "Do not add outside knowledge, assumptions, or new claims.\n"
+        "Do not add outside knowledge, assumptions, or new claims. "
+        f"If these facts do not contain what is needed to answer the question, "
+        f"reply with exactly this marker and nothing else: {NOT_ANSWERABLE_MARKER}\n"
         f"FACTS:\n{fact_block}\n"
         f"QUESTION:\n{query}"
     )
@@ -268,6 +257,11 @@ _QUERY_GLUE = _GROUNDING_GLUE | {
     "these", "they", "those", "us", "we", "what", "when", "where", "which",
     "who", "whom", "why", "would", "you", "your", "yours",
 }
+_QUERY_GLUE = frozenset(
+    token.strip().casefold()
+    for token in os.getenv("RAG_QUERY_GLUE_WORDS", ",".join(sorted(_QUERY_GLUE))).split(",")
+    if token.strip()
+)
 
 
 def _tokens(text: str) -> list[str]:
@@ -286,11 +280,11 @@ def _has_meaningful_overlap(query: str, item: dict[str, Any]) -> bool:
         return False
     knowledge_terms = set(_retrieval_terms(_fact_text(item)))
     overlap = query_terms & knowledge_terms
-    return bool(overlap) and len(overlap) / len(query_terms) >= 0.5
+    return bool(overlap) and len(overlap) / len(query_terms) >= RAG_BAND_QUERY_COVERAGE_RATIO
 
 
 def is_grounded(response: str, facts: list[str]) -> bool:
-    """Conservatively require the response's claims to be contained in the facts."""
+    """Check faithfulness only; relevance is enforced by retrieval and answerability."""
     response_tokens = _tokens(response)
     fact_tokens = _tokens(" ".join(facts))
     if not response_tokens or not fact_tokens:
@@ -401,6 +395,15 @@ class RestrictedRAGPipeline:
         if not success:
             raise RAGProviderError(result.get("error", "LLM generation failed"))
         response = result.get("response", "")
+        if NOT_ANSWERABLE_MARKER in response:
+            logger.info("teachme_not_answerable query=%r", query)
+            return RAGResult(
+                response=TEACH_ME_RESPONSE,
+                source="not_answerable",
+                query_tokens=query_tokens,
+                retrieval_terms=retrieval_terms,
+                best_similarity=best_similarity,
+            )
         if not is_grounded(response, facts):
             logger.warning("grounding_validation_failed query=%r", query)
             return RAGResult(
@@ -454,27 +457,19 @@ _llm_client = LLMServiceClient()
 
 
 @router.post("/sessions", status_code=201)
-async def start_rag_session(_trusted: str | None = Depends(require_internal_service)):
-    """Start a short-lived, unverified manual session at the user's SPACE press."""
-    session_id, _state = create_rag_session()
-    return {
-        "success": True,
-        "session_id": session_id,
-        "verified": False,
-        "idle_timeout_seconds": RAG_SESSION_IDLE_SECONDS,
-    }
-
-
-@router.post("/sessions/{session_id}/verify")
-async def bind_verified_user(session_id: str, request: Request):
-    """Bind the session to the identity from Audio's verified bearer token."""
+async def start_rag_session(
+    request: Request,
+    _trusted: str | None = Depends(require_internal_service),
+):
+    """Create a session only from the validated bearer subject after voice verification."""
     claims = require_session_claims(request)
-    state = verify_rag_session(session_id, str(claims["sub"]))
+    session_id, state = create_rag_session(str(claims["sub"]))
     return {
         "success": True,
         "session_id": session_id,
         "verified": state.verified,
         "user_id": state.user_id,
+        "idle_timeout_seconds": RAG_SESSION_IDLE_SECONDS,
     }
 
 
@@ -516,7 +511,7 @@ async def restricted_query(request: RAGQueryRequest, http_request: Request, resp
         if is_farewell:
             with _rag_sessions_lock:
                 _rag_sessions.pop(session_id, None)
-        if result.source in {"teachme_grounded", "no_match", "grounding_failure"}:
+        if result.source in {"teachme_grounded", "no_match", "not_answerable", "grounding_failure"}:
             persisted = await asyncio.to_thread(
                 add_conversation,
                 user_id=user_id,

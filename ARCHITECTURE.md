@@ -45,6 +45,23 @@ accelerator over the same store, with linear retrieval supported. TeachMe warms
 its embedding model in the background: health reports `embedding_model=loading`,
 and semantic routes return 503 until ready.
 
+Retrieval precision policy: scores at or above `RAG_MATCH_THRESHOLD` are admitted
+by the strict semantic band. Scores between `RAG_CANDIDATE_THRESHOLD` and that
+strict cutoff are admitted only when every query content term is covered by the
+fact (the coverage ratio is configurable and defaults to 1.0). Queries outside
+those bands do not reach the answer model. The server-built prompt additionally
+requires the shared `NOT_ANSWERABLE_MARKER` when a retrieved fact lacks the
+information requested; Central maps that marker to the teach-first response.
+The output grounding check is a faithfulness check only: it checks whether claims
+are supported by supplied facts, not whether those facts answer the question.
+Relevance is enforced before generation by the retrieval band and by the
+answerability instruction/marker.
+
+Manual sessions are created only after Audio verifies the speaker. Central
+validates the issued bearer token and takes the identity from its `sub` claim;
+the idle timer starts when this identified session is created, not when SPACE
+starts local capture.
+
 ## Resource authority
 
 Central owns the single camera/microphone lease authority. Priority is immutable:
