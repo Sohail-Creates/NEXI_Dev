@@ -12,6 +12,7 @@ from shared.secure_storage import ENCRYPTED_PREFIX, RotatingFernet
 
 DATABASE = Path(os.getenv("CENTRAL_DB_PATH", str(Path(__file__).parent / "data" / "central.sqlite3")))
 _connection = ContextVar("central_store_connection", default=None)
+SQLITE_BUSY_TIMEOUT_SECONDS = 5
 
 
 def _encode_record(table, record):
@@ -68,10 +69,24 @@ def initialize(database=DATABASE):
 def connect():
     if not DATABASE.exists():
         raise RuntimeError("Central SQLite store missing; run migrate_sqlite.py before startup")
-    conn = sqlite3.connect(DATABASE, timeout=30, check_same_thread=False)
+    conn = sqlite3.connect(
+        DATABASE,
+        timeout=SQLITE_BUSY_TIMEOUT_SECONDS,
+        check_same_thread=False,
+    )
     conn.execute("PRAGMA synchronous=FULL")
     conn.execute("PRAGMA secure_delete=ON")
     return conn
+
+
+@contextmanager
+def bind_connection(connection):
+    """Bind an existing request transaction for nested persistence helpers."""
+    token = _connection.set(connection)
+    try:
+        yield connection
+    finally:
+        _connection.reset(token)
 
 
 @contextmanager

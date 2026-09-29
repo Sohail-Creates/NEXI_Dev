@@ -220,16 +220,15 @@ async def delete_enrollment_data(
         raise HTTPException(status_code=500, detail=f"Failed to delete enrollment data: {str(e)}")
 
 
-@router.delete("/delete-user/{user_name}")
+@router.delete("/delete-user/{user_id}")
 async def delete_user_synchronized(
     request: Request,
-    user_name: str = Path(..., description="User name to delete")
+    user_id: str = Path(..., description="Unique user ID to permanently delete")
 ):
-    """Delete user from both Central Server and local storage"""
+    """Delete the selected user's records across the owning services."""
     try:
-        actual_user_id, _ = await enrollment_service.find_enrollment_by_user_name(user_name)
-        require_user_ownership(request, actual_user_id or user_name)
-        result = await enrollment_service.delete_user_from_all(user_name)
+        await require_internal_service(request)
+        result = await enrollment_service.delete_user_from_all(user_id)
         return result
     except HTTPException:
         raise

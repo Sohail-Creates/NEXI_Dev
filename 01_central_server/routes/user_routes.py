@@ -252,7 +252,7 @@ async def retired_user_conversation_history(
 
 @router.delete("/{user_id}")
 async def delete_user(user_id: str, request: Request):
-    """Delete user and all associated data"""
+    """Delete a user's Central profile, conversation/outbox data, and RAG context."""
     try:
         require_user_ownership(request, user_id)
         app_state = _get_app_state(request)
@@ -266,22 +266,35 @@ async def delete_user(user_id: str, request: Request):
                 user_index = i
                 break
         
-        if user_index == -1:
-            raise HTTPException(status_code=404, detail=f"User with ID '{user_id}' not found")
-        
-        deleted_user = app_state.db["users"].pop(user_index)
-        deleted_name = deleted_user.get("name", "Unknown")
-        
-        # Persist deletion immediately
-        await _persist_users(app_state, request, immediate=True)
-        
-        logger.info(f"User deleted: {deleted_name} (ID: {user_id})")
+        deleted_name = "Unknown"
+        if user_index >= 0:
+            deleted_user = app_state.db["users"].pop(user_index)
+            deleted_name = deleted_user.get("name", "Unknown")
+            await _persist_users(app_state, request, immediate=True)
+
+        # Conversation rows also carry cloud-sync outbox state. Reuse the
+        # Central persistence operation so both are removed together.
+        import asyncio
+        from conversations_persistence import delete_user_conversations
+        from restricted_rag import delete_rag_sessions_for_user
+
+        conversations_deleted = await asyncio.to_thread(delete_user_conversations, user_id)
+        if not conversations_deleted:
+            raise HTTPException(status_code=500, detail="Failed to delete user conversation and sync data")
+
+        removed_sessions = delete_rag_sessions_for_user(user_id)
+        logger.info(
+            "User data purged from Central: user_id=%s conversations=deleted rag_sessions=%d",
+            user_id,
+            removed_sessions,
+        )
         
         return {
             "status": "deleted",
-            "message": f"User '{deleted_name}' and all associated data deleted successfully",
+            "message": f"User '{deleted_name}' Central data deleted successfully",
             "user_id": user_id,
-            "user_name": deleted_name
+            "user_name": deleted_name,
+            "deleted_stores": ["central_profile", "conversations_and_sync_outbox", "rag_session_context"],
         }
     
     except HTTPException:

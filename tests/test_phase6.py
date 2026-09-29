@@ -714,6 +714,67 @@ def test_shared_error_handler_covers_rate_limit_unexpected_and_vision_model_fail
     print(f"VISION_COMPLETE_DEEPFACE HTTP=503 body={complete_body}")
 
 
+def test_enrollment_account_deletion_purges_encrypted_data_and_logs(tmp_path, monkeypatch):
+    import asyncio
+    from cryptography.fernet import Fernet
+
+    enrollment_dir = ROOT / "06_enrollment_service"
+    if str(enrollment_dir) not in sys.path:
+        sys.path.insert(0, str(enrollment_dir))
+    from app.utils import encryption
+    from app.utils.storage_async import AsyncEnrollmentStorage
+
+    monkeypatch.setattr(encryption, "_encryption_manager", None)
+    monkeypatch.setenv("NEXI_FERNET_KEY", Fernet.generate_key().decode("ascii"))
+    storage = AsyncEnrollmentStorage(str(tmp_path / "enrollment"))
+    asyncio.run(storage.save_enrollment("delete-user", {"user_name": "Delete Me", "voice_embeddings": [[0.1]]}))
+    asyncio.run(storage.save_enrollment("keep-user", {"user_name": "Keep Me", "voice_embeddings": [[0.2]]}))
+
+    assert asyncio.run(storage.delete_enrollment("delete-user")) is True
+    assert asyncio.run(storage.delete_enrollment("delete-user")) is True
+    assert not (tmp_path / "enrollment" / "users" / "delete-user").exists()
+    assert asyncio.run(storage.get_enrollment("keep-user"))["user_name"] == "Keep Me"
+    remaining_logs = asyncio.run(storage.get_logs())
+    assert all(entry["user_id"] != "delete-user" for entry in remaining_logs)
+    assert any(entry["user_id"] == "keep-user" for entry in remaining_logs)
+
+
+def test_terminal_user_delete_selects_unique_id_and_uses_only_rest(monkeypatch, capsys):
+    import builtins
+    import test as manual_console
+
+    calls = []
+
+    class FakeRESTClient:
+        output_mode = "narrative"
+
+        def request(self, service, method, path, **kwargs):
+            calls.append((service, method, path, kwargs))
+            if (service, method, path) == ("central", "GET", "/users/list"):
+                return manual_console.LiveResponse(200, {}, {"users": [
+                    {"user_id": "user_001", "user_name": "Same Name"},
+                    {"user_id": "user_002", "user_name": "Same Name"},
+                ]}, b"")
+            return manual_console.LiveResponse(200, {}, {"status": "deleted"}, b"")
+
+    inputs = iter(("user_002", "DELETE"))
+    monkeypatch.setattr(builtins, "input", lambda _prompt="": next(inputs))
+    console = manual_console.Sprint2Console(FakeRESTClient())
+    response = manual_console._interactive_delete_user(console)
+
+    assert response.ok
+    assert [call[2] for call in calls] == [
+        "/users/list",
+        "/enrollment/delete-user/user_002",
+    ]
+    assert calls[0][3]["internal"] is True
+    assert calls[1][3]["internal"] is True
+    assert "bearer" not in calls[1][3]
+    output = capsys.readouterr().out
+    assert "User ID to delete:" not in output
+    assert "User Same Name (user_002) deleted successfully." in output
+
+
 if __name__ == "__main__":
     if "--openapi" in sys.argv:
         run_live_openapi_contract()

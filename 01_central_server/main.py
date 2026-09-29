@@ -15,7 +15,7 @@ from shared.api_errors import error_response, install_error_handlers
 from shared.request_middleware import install_request_observability
 import asyncio
 
-from sqlite_store import DATABASE, read_records, connect, ensure_users_encrypted
+from sqlite_store import DATABASE, read_records, connect, ensure_users_encrypted, bind_connection
 from starlette.responses import JSONResponse
 from routes import user_router
 from routes.conversations_routes import router as conversations_router
@@ -71,7 +71,11 @@ def create_app() -> FastAPI:
                 app.state.db["users"] = read_records("users", connection)
                 request.state.user_connection = connection
                 request.state.persistence_failed = False
-                response = await call_next(request)
+                # Keep nested persistence helpers on this same transaction.
+                # In particular, deleting conversations must not open a
+                # second writer while this request holds BEGIN IMMEDIATE.
+                with bind_connection(connection):
+                    response = await call_next(request)
                 if request.state.persistence_failed:
                     connection.rollback()
                     return error_response(request, 500, "Failed to persist users")

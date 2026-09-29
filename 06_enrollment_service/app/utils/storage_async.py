@@ -141,19 +141,38 @@ class AsyncEnrollmentStorage:
             True if successful
         """
         user_dir = os.path.join(self.users_dir, user_id)
-        
-        if not os.path.exists(user_dir):
-            return False
-        
+        log_file = os.path.join(self.logs_dir, "enrollments.json")
+        temporary_log = f"{log_file}.delete.tmp"
+
         try:
-            # Use loop.run_in_executor for sync shutil operation
+            # Remove enrollment identifiers from the service audit file too;
+            # retaining a "deleted" event would still retain user data.
+            if os.path.exists(log_file):
+                async with aiofiles.open(log_file, "r", encoding="utf-8") as source:
+                    logs = json.loads(await source.read())
+                if not isinstance(logs, list):
+                    raise ValueError("Enrollment log has an invalid format")
+                retained_logs = [
+                    entry for entry in logs
+                    if not isinstance(entry, dict) or entry.get("user_id") != user_id
+                ]
+                async with aiofiles.open(temporary_log, "w", encoding="utf-8") as target:
+                    await target.write(json.dumps(retained_logs, indent=2))
+                os.replace(temporary_log, log_file)
+
+            # Idempotent: a retry after partial cleanup succeeds when the
+            # user's directory is already absent.
             import shutil
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, shutil.rmtree, user_dir)
-            
-            await self._log_enrollment(user_id, "deleted")
+            if os.path.exists(user_dir):
+                loop = asyncio.get_running_loop()
+                await loop.run_in_executor(None, shutil.rmtree, user_dir)
             return True
         except Exception as e:
+            if os.path.exists(temporary_log):
+                try:
+                    os.remove(temporary_log)
+                except OSError:
+                    pass
             print(f"Error deleting enrollment for {user_id}: {e}")
             return False
     

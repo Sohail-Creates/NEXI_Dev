@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -142,6 +143,41 @@ def sample_record(index: int) -> dict:
         "language": "en",
         "metadata": {"local_only_metadata": True},
     }
+
+
+@pytest.mark.asyncio
+async def test_central_delete_reuses_request_transaction_connection(tmp_path, monkeypatch) -> None:
+    """A nested conversation purge must reuse Central's held user transaction."""
+    import sqlite_store
+    import conversations_persistence
+
+    database = tmp_path / "central-delete.sqlite3"
+    sqlite_store.initialize(database)
+    migrate_outbox(database)
+    monkeypatch.setattr(sqlite_store, "DATABASE", database)
+    sqlite_store.write_records("conversations", [sample_record(1)])
+
+    request_connection = sqlite_store.connect()
+    request_connection.execute("BEGIN IMMEDIATE")
+
+    def reject_nested_connection():
+        raise AssertionError("delete opened a second SQLite connection")
+
+    monkeypatch.setattr(sqlite_store, "connect", reject_nested_connection)
+    try:
+        with sqlite_store.bind_connection(request_connection):
+            deleted = await asyncio.to_thread(
+                conversations_persistence.delete_user_conversations,
+                "user-phase7",
+            )
+        assert deleted is True
+        request_connection.commit()
+        remaining = request_connection.execute(
+            "SELECT COUNT(*) FROM conversations"
+        ).fetchone()[0]
+        assert remaining == 0
+    finally:
+        request_connection.close()
 
 
 def database_with_records(path: Path, count: int, *, migrate_schema: bool = True) -> Path:

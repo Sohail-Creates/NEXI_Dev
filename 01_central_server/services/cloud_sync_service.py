@@ -23,6 +23,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from shared.retry_handler import RetryHandler, RetryPolicy
 from shared.security import require_internal_service
+from sqlite_store import SQLITE_BUSY_TIMEOUT_SECONDS
 
 
 logger = logging.getLogger(__name__)
@@ -149,7 +150,10 @@ class ConversationOutbox:
         self.clock = clock
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.database, timeout=30)
+        connection = sqlite3.connect(
+            self.database,
+            timeout=SQLITE_BUSY_TIMEOUT_SECONDS,
+        )
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA synchronous=FULL")
         return connection

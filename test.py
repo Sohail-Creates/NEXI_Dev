@@ -773,13 +773,32 @@ def _interactive_delete_object(console: "Sprint2Console") -> LiveResponse | None
 
 
 def _interactive_delete_user(console: "Sprint2Console") -> LiveResponse | None:
-    user_name = input("Enrolled user name: ").strip()
-    if not user_name:
-        raise ValueError("User name is required")
-    if not _confirmed_delete(user_name):
+    listing = console.list_users()
+    if not listing.ok:
+        return listing
+    users = listing.body.get("users", []) if isinstance(listing.body, Mapping) else []
+    available = {
+        str(user.get("user_id")): user
+        for user in users
+        if isinstance(user, Mapping) and user.get("user_id")
+    }
+    if not available:
+        print("No enrolled users found.")
+        return listing
+
+    user_id = input("User ID to delete: ").strip()
+    selected = available.get(user_id)
+    if selected is None:
+        print("That ID is not in the enrolled-user list; nothing was deleted.")
+        return None
+    user_name = selected.get("user_name") or selected.get("name") or "user"
+    if not _confirmed_delete(user_id):
         print("Deletion cancelled")
         return None
-    return console.delete_user(user_name)
+    response = console.delete_user(user_id)
+    if response.ok:
+        print(f"User {user_name} ({user_id}) deleted successfully.")
+    return response
 
 
 class Sprint2Console:
@@ -959,11 +978,10 @@ class Sprint2Console:
                 print(f"  {user.get('user_id', '?')}: {user.get('name') or user.get('user_name') or '?'}")
         return response
 
-    def delete_user(self, user_name: str) -> LiveResponse:
-        self._require_session()
+    def delete_user(self, user_id: str) -> LiveResponse:
         return self.client.request(
-            "enrollment", "DELETE", f"/enrollment/delete-user/{quote(user_name, safe='')}",
-            bearer=self.session.token,
+            "enrollment", "DELETE", f"/enrollment/delete-user/{quote(user_id, safe='')}",
+            internal=True, display=False,
         )
 
     def conversation_history(self) -> LiveResponse:

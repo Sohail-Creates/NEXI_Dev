@@ -699,62 +699,118 @@ class EnrollmentService:
             print(f"[FindUser] Traceback: {traceback.format_exc()}")
             return None, None
     
-    async def delete_user_from_all(self, user_name: str) -> Dict:
-        """Delete user from both Central Server and local storage"""
+    async def delete_user_from_all(self, user_id: str) -> Dict:
+        """Purge a user's records through the services that own each store.
+
+        The unique ID is resolved from the live Central record; local encrypted
+        enrollment data remains until remote cleanup has succeeded, allowing a
+        failed downstream step to be retried by the same ID.
+        """
         try:
-            print(f"[DeleteUser] Starting synchronized deletion for user: {user_name}")
-            
-            # Step 1: Find user in Central Server to get user_id
-            actual_user_id, existing_data = await self.find_enrollment_by_user_name(user_name)
-            if not actual_user_id:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"User '{user_name}' not found in enrollment records"
+            print(f"[DeleteUser] Starting synchronized deletion for user_id={user_id}")
+            local_record = await self.storage.get_enrollment_smart(user_id)
+            import httpx
+            central_url = settings.central_server_url.rstrip("/")
+            headers = internal_service_headers(user_id)
+            async with httpx.AsyncClient(
+                # Central's SQLite writes now share one request transaction;
+                # allow a bounded margin for a real structured error to return.
+                timeout=15.0,
+                headers=headers,
+                verify=client_verify(central_url),
+            ) as client:
+                profile_lookup = await client.get(f"{central_url}/users/{user_id}")
+                if profile_lookup.status_code == 404 and local_record is None:
+                    raise HTTPException(status_code=404, detail="Enrolled user ID was not found")
+                if profile_lookup.status_code not in (200, 404):
+                    raise HTTPException(status_code=502, detail="Central Server could not verify the user ID")
+
+                profile_data = profile_lookup.json() if profile_lookup.status_code == 200 else {}
+                user_name = (
+                    profile_data.get("name")
+                    or profile_data.get("user_name")
+                    or (local_record or {}).get("user_name")
+                    or user_id
                 )
-            
-            print(f"[DeleteUser] Found user_id: {actual_user_id}")
-            
-            # Step 2: Delete from Central Server
-            try:
-                import httpx
-                async with httpx.AsyncClient(
-                    timeout=10.0, headers=internal_service_headers(actual_user_id),
-                    verify=client_verify(settings.central_server_url),
-                ) as client:
-                    response: httpx.Response = await client.delete(f"{settings.central_server_url}/users/{actual_user_id}")
-                    if response.status_code != 200:
-                        raise HTTPException(
-                            status_code=response.status_code,
-                            detail=f"Failed to delete from Central Server: {response.text}"
-                        )
-                    print(f"[DeleteUser]  Deleted from Central Server")
-            except Exception as e:
-                print(f"[DeleteUser]  Error deleting from Central Server: {str(e)}")
-                raise HTTPException(status_code=500, detail=f"Failed to delete from Central Server: {str(e)}")
-            
-            # Step 3: Delete from local storage (async)
-            try:
-                await self.storage.delete_enrollment_smart(actual_user_id)
-                print(f"[DeleteUser]  Deleted from local storage")
-            except Exception as e:
-                print(f"[DeleteUser]  Error deleting from local storage: {str(e)}")
-                # Don't fail here - user is already deleted from Central Server
-                # Log the error but continue
+
+                # The existing Central delete endpoint owns its profile,
+                # biometric vectors, durable conversations/outbox, and
+                # in-memory RAG session context.
+                profile = await client.delete(f"{central_url}/users/{user_id}")
+                if profile.status_code != 200:
+                    try:
+                        error_body = profile.json()
+                    except ValueError:
+                        error_body = None
+                    central_error = None
+                    if isinstance(error_body, dict):
+                        envelope = error_body.get("error")
+                        if isinstance(envelope, dict):
+                            central_error = envelope.get("message")
+                        central_error = central_error or error_body.get("detail") or error_body.get("message")
+                    if isinstance(central_error, dict):
+                        central_error = central_error.get("message") or str(central_error)
+                    central_error = str(central_error or profile.text or "No error detail returned by Central")
+                    raise HTTPException(
+                        status_code=502,
+                        detail=(
+                            f"Central user deletion failed (HTTP {profile.status_code}): "
+                            f"{central_error}"
+                        ),
+                    )
+                print("[DeleteUser] Central profile, embeddings, history, and session context purged")
+
+            # Audio's existing full-refresh route rebuilds its persisted and
+            # in-memory speaker index from Central's remaining user records.
+            sync_result = await self.audio_client.sync_speakers_from_central()
+            sync_issues = sync_result.get("validation_issues") or []
+            persistence_failed = any(
+                "disk save failed" in str(issue).casefold()
+                for issue in sync_issues
+            )
+            if sync_result.get("success") is not True or persistence_failed:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Audio Service could not confirm a persisted speaker-index refresh after deletion",
+                )
+            print("[DeleteUser] Audio speaker index refreshed")
+
+            # Delete local photos, voice samples, and encrypted enrollment
+            # metadata only after all remote cleanup has succeeded.
+            if not await self.storage.delete_enrollment_smart(user_id):
+                raise HTTPException(
+                    status_code=500,
+                    detail="Enrollment storage could not confirm permanent local deletion",
+                )
+            print("[DeleteUser] Local enrollment files and user logs purged")
             
             print(f"[DeleteUser]  Successfully deleted user {user_name}")
             
             return {
                 "status": "deleted",
-                "message": f"User '{user_name}' deleted from all systems",
-                "user_id": actual_user_id,
-                "user_name": user_name
+                "message": f"User '{user_name}' data deleted from Central, Audio, and Enrollment",
+                "user_id": user_id,
+                "user_name": user_name,
+                "deleted_stores": ["central_profile_and_embeddings", "conversations_and_sync_outbox", "rag_session_context", "audio_speaker_index", "enrollment_files", "enrollment_logs"],
             }
         
         except HTTPException:
             raise
         except Exception as e:
-            print(f"[DeleteUser]  ERROR: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Failed to delete user: {str(e)}")
+            import traceback
+
+            # Some transport exceptions (notably httpx timeout exceptions)
+            # have an empty __str__. Keep the failing stage and traceback in
+            # the service log so a partial cross-service delete is diagnosable.
+            error_text = str(e).strip() or repr(e) or type(e).__name__
+            print(
+                f"[DeleteUser] ERROR: {type(e).__name__}: {error_text}\n"
+                f"{traceback.format_exc()}"
+            )
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to delete user ({type(e).__name__}): {error_text}",
+            ) from e
     
     def _cleanup_files(self, file_paths: list) -> None:
         """Delete temporary files"""

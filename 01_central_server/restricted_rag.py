@@ -164,6 +164,18 @@ def create_rag_session(user_id: str) -> tuple[str, RAGSession]:
     return session_id, state
 
 
+def delete_rag_sessions_for_user(user_id: str) -> int:
+    """Forget in-memory session context when its owning account is deleted."""
+    with _rag_sessions_lock:
+        session_ids = [
+            session_id for session_id, state in _rag_sessions.items()
+            if state.user_id == user_id
+        ]
+        for session_id in session_ids:
+            _rag_sessions.pop(session_id, None)
+        return len(session_ids)
+
+
 def normalize_retrieval_query(query: str) -> str:
     """Remove configured conversational filler while retaining a semantic phrase."""
     normalized = query.strip()
