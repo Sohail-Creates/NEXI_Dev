@@ -176,7 +176,7 @@ def _knowledge_item_line(item: Mapping[str, Any], item_type: str) -> str:
         summary = f"{subject}: {predicate}".rstrip(": ")
         if value:
             summary += f" ({value})" if predicate else f": {value}"
-        return summary
+        return f"[{item_id}] {summary}" if item_id else summary
 
     name = " ".join(str(data.get("name") or item.get("name") or "Object").split())
     description = " ".join(str(data.get("description") or "").split())
@@ -797,14 +797,17 @@ def _confirmed_delete(label: str) -> bool:
     return input(f"Type DELETE to remove {label}: ").strip() == "DELETE"
 
 
-def _interactive_delete_object(console: "Sprint2Console") -> LiveResponse | None:
-    item_id = input("Taught object item ID: ").strip()
+def _interactive_delete_knowledge(console: "Sprint2Console") -> LiveResponse | None:
+    item_type = input("Delete taught [fact/object]: ").strip().lower()
+    if item_type not in {"fact", "object"}:
+        raise ValueError("Choose fact or object")
+    item_id = input(f"Taught {item_type} ID: ").strip()
     if not item_id:
         raise ValueError("Item ID is required")
     if not _confirmed_delete(item_id):
         print("Deletion cancelled")
         return None
-    return console.delete_object(item_id)
+    return console.delete_knowledge_item(item_id)
 
 
 def _interactive_delete_user(console: "Sprint2Console") -> LiveResponse | None:
@@ -999,7 +1002,7 @@ class Sprint2Console:
         path = "/knowledge/facts" if item_type == "fact" else "/knowledge/objects"
         return self.client.request("teachme", "GET", path, internal=True)
 
-    def delete_object(self, item_id: str) -> LiveResponse:
+    def delete_knowledge_item(self, item_id: str) -> LiveResponse:
         return self.client.request(
             "teachme", "DELETE", f"/forget/{quote(item_id, safe='')}", internal=True
         )
@@ -1381,7 +1384,7 @@ NEXI live REST console
  5  Return user (record, verify, RAG, Jenny, playback)
  6  Teach fact or object
  7  View taught facts and objects
- 8  Delete taught object
+ 8  Delete taught fact or object
  9  List enrolled users
 10  Delete enrolled user
 11  Video call (start/end and resource trace)
@@ -1401,7 +1404,7 @@ def _interactive(console: Sprint2Console) -> int:
         "5": lambda: console.return_user(input("Trigger [manual/wake]: ").strip().lower() or "manual"),
         "6": lambda: _interactive_teach(console),
         "7": lambda: (console.list_knowledge("fact"), console.list_knowledge("object")),
-        "8": lambda: _interactive_delete_object(console),
+        "8": lambda: _interactive_delete_knowledge(console),
         "9": lambda: console.list_users(),
         "10": lambda: _interactive_delete_user(console),
         "11": lambda: console.video_call(input("Call ID (blank=generated): ").strip() or None),

@@ -851,7 +851,7 @@ def test_knowledge_lists_show_compact_previews_and_cap_large_output(capsys):
     )
 
     output = capsys.readouterr().out
-    assert "Fact list: 1 — My hometown: is Layyah (Punjab, Pakistan)." in output
+    assert "Fact list: 1 — [fact-1] My hometown: is Layyah (Punjab, Pakistan)." in output
     assert "Object list: 1 — blue backpack [object-1]: school bag." in output
     assert "embedding" not in output
     assert len(output.splitlines()) == 2
@@ -880,6 +880,50 @@ def test_knowledge_lists_show_compact_previews_and_cap_large_output(capsys):
     assert len(large_output) == 2
     assert "Fact list: 50" in large_output[0] and "+47 more" in large_output[0]
     assert "Object list: 50" in large_output[1] and "+47 more" in large_output[1]
+
+
+def test_console_can_delete_a_fact_by_its_item_id(monkeypatch):
+    import sys
+
+    harness_path = ROOT / "test.py"
+    spec = importlib.util.spec_from_file_location("live_rest_delete_fact", harness_path)
+    assert spec is not None and spec.loader is not None
+    harness = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = harness
+    spec.loader.exec_module(harness)
+
+    class FakeConsole:
+        deleted_id = None
+
+        def delete_knowledge_item(self, item_id):
+            self.deleted_id = item_id
+            return "deleted"
+
+    console = FakeConsole()
+    answers = iter(("fact", "fact-123", "DELETE"))
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
+    assert harness._interactive_delete_knowledge(console) == "deleted"
+    assert console.deleted_id == "fact-123"
+
+
+@pytest.mark.asyncio
+async def test_teachme_forget_unknown_id_returns_not_found(tmp_path, monkeypatch):
+    monkeypatch.setenv("STORAGE_FILE", str(tmp_path / "knowledge.json"))
+    monkeypatch.setenv("BACKUP_DIR", str(tmp_path / "backups"))
+    initialize(tmp_path / "knowledge.sqlite3")
+    from teachme_service import app as teachme_app
+
+    monkeypatch.setattr(
+        teachme_app.knowledge_base,
+        "forget_item",
+        lambda _item_id, _permanent, skip_save=False: False,
+    )
+
+    with pytest.raises(teachme_app.HTTPException) as raised:
+        await teachme_app.forget_item("dummy-id", permanent=False, _auth=None)
+
+    assert raised.value.status_code == 404
+    assert "Please enter a valid ID" in str(raised.value.detail)
 
 
 def test_console_reports_unexpected_menu_exception_and_returns_to_menu(monkeypatch, capsys):

@@ -673,11 +673,10 @@ async def forget_item(
         
         if not success:
             logger.warning(f"Item not found: {item_id}")
-            return {
-                "error": "Item not found",
-                "item_id": item_id,
-                "status_code": 404
-            }
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No taught item found with ID '{item_id}'. Please enter a valid ID.",
+            )
         
         action = "permanently deleted" if permanent else "forgotten (soft delete)"
         logger.info(f"Item {item_id} {action}")
