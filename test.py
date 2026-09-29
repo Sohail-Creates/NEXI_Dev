@@ -31,6 +31,7 @@ SERVICE_TOKEN_HEADER = "X-NEXI-Service-Token"
 CORRELATION_HEADER = "X-Correlation-ID"
 DEFAULT_TIMEOUT_SECONDS = float(os.getenv("NEXI_HARNESS_TIMEOUT", "90"))
 CONSOLE_OUTPUT_MODES = ("narrative", "trace", "debug")
+KNOWLEDGE_PREVIEW_LIMIT = 3
 
 
 def _service_url(environment_name: str, port: int) -> str:
@@ -161,6 +162,26 @@ def _operation_name(path: str) -> str:
         return known[normalized]
     leaf = normalized.rsplit("/", 1)[-1].replace("-", " ").replace("_", " ")
     return leaf[:1].upper() + leaf[1:] if leaf else "Service request"
+
+
+def _knowledge_item_line(item: Mapping[str, Any], item_type: str) -> str:
+    """Render a compact, user-facing preview without embedding metadata."""
+    data = item.get("data") if isinstance(item.get("data"), Mapping) else {}
+    item_id = str(item.get("id") or "").strip()
+
+    if item_type == "fact":
+        subject = " ".join(str(data.get("subject") or "Fact").split())
+        predicate = " ".join(str(data.get("predicate") or "").split())
+        value = " ".join(str(data.get("object") or "").split())
+        summary = f"{subject}: {predicate}".rstrip(": ")
+        if value:
+            summary += f" ({value})" if predicate else f": {value}"
+        return summary
+
+    name = " ".join(str(data.get("name") or item.get("name") or "Object").split())
+    description = " ".join(str(data.get("description") or "").split())
+    identity = f" [{item_id}]" if item_id else ""
+    return f"{name}{identity}" + (f": {description}" if description else "")
 
 
 @dataclass
@@ -459,10 +480,24 @@ class LiveRESTClient:
             print(f"{service_name} health: {reported_status} (HTTP {response.status_code}).")
             return
         if path.endswith("/knowledge/facts") or path.endswith("/knowledge/objects"):
-            kind = "facts" if path.endswith("/facts") else "objects"
+            item_type = "fact" if path.endswith("/facts") else "object"
+            items_key = "facts" if item_type == "fact" else "objects"
+            items = body.get(items_key)
+            items = [item for item in items if isinstance(item, Mapping)] if isinstance(items, list) else []
             count = body.get("count")
-            detail = f"{count} {kind}" if count is not None else kind
-            print(f"{operation}: retrieved {detail} (HTTP {response.status_code}).")
+            count = count if isinstance(count, int) and count >= 0 else len(items)
+            preview = [
+                _knowledge_item_line(item, item_type)
+                for item in items[:KNOWLEDGE_PREVIEW_LIMIT]
+            ]
+            if count > len(preview):
+                preview.append(f"+{count - len(preview)} more")
+            summary = f"{operation}: {count}"
+            if not items:
+                summary += f" (none taught)"
+            elif preview:
+                summary += " — " + "; ".join(preview)
+            print(summary + ".")
             return
         if path.endswith("/users/list"):
             users = body.get("users", [])

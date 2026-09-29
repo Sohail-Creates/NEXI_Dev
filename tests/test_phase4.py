@@ -815,6 +815,73 @@ def test_speaker_verification_narrative_reports_score_and_threshold(capsys):
     assert captured.index("confidence 0.00") < captured.index("Please enroll")
 
 
+def test_knowledge_lists_show_compact_previews_and_cap_large_output(capsys):
+    import sys
+
+    harness_path = ROOT / "test.py"
+    spec = importlib.util.spec_from_file_location("live_rest_knowledge_summary", harness_path)
+    assert spec is not None and spec.loader is not None
+    harness = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = harness
+    spec.loader.exec_module(harness)
+    client = object.__new__(harness.LiveRESTClient)
+    client.output_mode = "narrative"
+
+    client._report_narrative(
+        "teachme", "GET", "/knowledge/facts",
+        harness.LiveResponse(200, {}, {
+            "count": 1,
+            "facts": [{
+                "id": "fact-1",
+                "data": {"subject": "My hometown", "predicate": "is Layyah", "object": "Punjab, Pakistan"},
+                "embedding": [0.1, 0.2],
+            }],
+        }, b""),
+    )
+    client._report_narrative(
+        "teachme", "GET", "/knowledge/objects",
+        harness.LiveResponse(200, {}, {
+            "count": 1,
+            "objects": [{
+                "id": "object-1",
+                "data": {"name": "blue backpack", "category": "bag", "description": "school bag", "attributes": {"color": "blue"}},
+                "embedding": [0.3, 0.4],
+            }],
+        }, b""),
+    )
+
+    output = capsys.readouterr().out
+    assert "Fact list: 1 — My hometown: is Layyah (Punjab, Pakistan)." in output
+    assert "Object list: 1 — blue backpack [object-1]: school bag." in output
+    assert "embedding" not in output
+    assert len(output.splitlines()) == 2
+
+    client._report_narrative(
+        "teachme", "GET", "/knowledge/facts",
+        harness.LiveResponse(200, {}, {
+            "count": 50,
+            "facts": [
+                {"data": {"subject": f"Fact {index}", "predicate": "is known", "object": "value"}}
+                for index in range(50)
+            ],
+        }, b""),
+    )
+    client._report_narrative(
+        "teachme", "GET", "/knowledge/objects",
+        harness.LiveResponse(200, {}, {
+            "count": 50,
+            "objects": [
+                {"id": f"object-{index}", "data": {"name": f"Object {index}"}}
+                for index in range(50)
+            ],
+        }, b""),
+    )
+    large_output = capsys.readouterr().out.splitlines()
+    assert len(large_output) == 2
+    assert "Fact list: 50" in large_output[0] and "+47 more" in large_output[0]
+    assert "Object list: 50" in large_output[1] and "+47 more" in large_output[1]
+
+
 def test_console_reports_unexpected_menu_exception_and_returns_to_menu(monkeypatch, capsys):
     import sys
 
