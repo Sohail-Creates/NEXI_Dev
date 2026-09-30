@@ -10,6 +10,7 @@ from typing import Optional, Dict, List, Tuple
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+_SERVICE_ROOT = Path(__file__).resolve().parents[2]
 
 
 class ObjectDetector:
@@ -53,14 +54,15 @@ class ObjectDetector:
         try:
             from ultralytics import YOLO
             
-            if self.model_path and Path(self.model_path).exists():
-                # Load from specific path (e.g., models/yolov8n.pt)
-                logger.info(f"Loading YOLO from {self.model_path}...")
-                self.model = YOLO(self.model_path)
-            else:
-                # Load from ultralytics auto-download
-                logger.info(f"Loading YOLO model: {self.model_name}...")
-                self.model = YOLO(f"{self.model_name}.pt")
+            checkpoint = (
+                Path(self.model_path).expanduser().resolve()
+                if self.model_path
+                else (_SERVICE_ROOT / f"{self.model_name}.pt").resolve()
+            )
+            if not checkpoint.is_file():
+                raise FileNotFoundError(f"YOLO checkpoint not found: {checkpoint}")
+            logger.info("Loading YOLO from absolute checkpoint path %s", checkpoint)
+            self.model = YOLO(str(checkpoint))
             
             self.available = True
             logger.info(f"YOLO {self.model_name} loaded successfully")
@@ -147,8 +149,7 @@ class ObjectDetector:
                     detections.append(detection)
                     
                 except Exception as e:
-                    logger.warning(f"Error processing detection: {e}")
-                    continue
+                    raise RuntimeError("Failed to decode YOLO detection output") from e
             
             return {
                 "objects_detected": len(detections),

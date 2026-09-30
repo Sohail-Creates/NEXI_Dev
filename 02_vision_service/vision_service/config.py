@@ -30,6 +30,7 @@ class Config:
     DEEPFACE_HOME = Path(os.environ["DEEPFACE_HOME"])
     
     CAMERA_TIMEOUT = int(os.getenv("CAMERA_TIMEOUT", "10"))
+    INFERENCE_MAX_CONCURRENCY = max(1, int(os.getenv("VISION_INFERENCE_MAX_CONCURRENCY", "1")))
     CAMERA_DEVICE = os.getenv("VISION_CAMERA_DEVICE", "").strip() or None
     # Loopback IP avoids Windows' localhost IPv6 fallback delay while remaining
     # fully overrideable for container/remote deployments.

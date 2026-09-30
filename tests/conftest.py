@@ -5,12 +5,25 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 import os
+import sys
+import tempfile
 
 import pytest
 
 
 # Deterministic, test-only key. Production startup fails closed without a key.
 os.environ.setdefault("NEXI_FERNET_KEY", "g2UnTbcWj1lTsK40oN1HOJE_gnm36gjiT25g3J2V1BA=")
+
+# Central's module-level app construction opens its configured database during
+# pytest collection. Keep the deterministic test key paired with a disposable
+# test database instead of accidentally applying it to the developer's store.
+_CENTRAL_TEST_DIRECTORY = tempfile.TemporaryDirectory(prefix="nexi-pytest-central-")
+os.environ["CENTRAL_DB_PATH"] = str(Path(_CENTRAL_TEST_DIRECTORY.name) / "central.sqlite3")
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_REPOSITORY_ROOT / "01_central_server"))
+from sqlite_store import initialize as _initialize_test_central_store
+
+_initialize_test_central_store()
 
 
 # These are interactive physical-device visualizers, not pytest suites. Keeping

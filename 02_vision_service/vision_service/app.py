@@ -51,6 +51,7 @@ async def lifespan(app: FastAPI):
     """
     global _resource_pool
     app.state.face_model_loaded = False
+    app.state.object_model_loaded = False
     
     # Startup
     logger.info("=" * 60)
@@ -101,7 +102,8 @@ async def lifespan(app: FastAPI):
         
         # Test YOLO availability if enabled
         if Config.ENABLE_OBJECT_DETECTION:
-            if _resource_pool.is_object_detector_available():
+            app.state.object_model_loaded = _resource_pool.is_object_detector_available()
+            if app.state.object_model_loaded:
                 logger.info(f" Object detection is available ({Config.OBJECT_DETECTION_MODEL})")
             else:
                 logger.warning(" Object detection is not available")

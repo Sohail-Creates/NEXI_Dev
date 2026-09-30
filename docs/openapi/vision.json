@@ -319,6 +319,10 @@
             "title": "Face Model",
             "type": "string"
           },
+          "object_model": {
+            "title": "Object Model",
+            "type": "string"
+          },
           "opencv_version": {
             "title": "Opencv Version",
             "type": "string"
@@ -336,6 +340,7 @@
           "status",
           "camera",
           "face_model",
+          "object_model",
           "opencv_version",
           "emotion_detection",
           "timestamp"

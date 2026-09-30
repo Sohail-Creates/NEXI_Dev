@@ -14,6 +14,14 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 
+class NoFaceDetected(Exception):
+    """Raised only when the selected face detector finds no face."""
+
+
+class FaceEmbeddingError(Exception):
+    """Raised when a detected face cannot be embedded reliably."""
+
+
 def require_deepface():
     """Return the optional face runtime or preserve its actionable import error."""
     from deepface import DeepFace
@@ -113,8 +121,7 @@ def process_face(
         confidence = float(face_obj.get('confidence', 0.99))
         face_img = face_obj.get('face')
         
-        # Extract embedding
-        embedding = [0.0] * 128
+        # Never turn a failed inference into a plausible-looking zero vector.
         try:
             embedding_objs = DeepFace.represent(
                 img_path=face_img,
@@ -122,9 +129,14 @@ def process_face(
                 enforce_detection=False
             )
             embedding = embedding_objs[0]['embedding']
+            if embedding is None or len(embedding) == 0 or not np.isfinite(
+                np.asarray(embedding, dtype=float)
+            ).all():
+                raise ValueError("model returned an empty or non-finite embedding")
             logger.debug(f"Face {face_index}: Generated {len(embedding)}-dimensional embedding")
         except Exception as e:
-            logger.warning(f"Failed to generate embedding for face {face_index}: {str(e)[:100]}")
+            logger.exception("Failed to generate embedding for face %s", face_index)
+            raise FaceEmbeddingError(f"Could not embed detected face {face_index}") from e
         
         return {
             'face_id': face_index,
@@ -161,7 +173,7 @@ def detect_faces_deepface(
         face_objs = DeepFace.extract_faces(
             img_path=frame,
             detector_backend=detector_backend,
-            enforce_detection=False,
+            enforce_detection=True,
             align=True
         )
         logger.info(f"Face detection complete: {len(face_objs)} faces detected")
@@ -169,5 +181,11 @@ def detect_faces_deepface(
         
     except Exception as e:
         logger.error(f"Error in face detection: {e}")
-        return []
+        try:
+            from deepface.modules.exceptions import FaceNotDetected
+        except ImportError:
+            FaceNotDetected = ()
+        if isinstance(e, FaceNotDetected):
+            raise NoFaceDetected("No face detected in the supplied image") from e
+        raise
 

@@ -4,7 +4,6 @@ From Vision-Nexus
 """
 
 import cv2
-import asyncio
 import logging
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
@@ -45,20 +44,26 @@ async def health_check_root():
 async def health_check_detailed(request: Request):
     """
     Detailed health check endpoint
-    Report the model initialization result and actual camera availability.
+    Return readiness without acquiring hardware; camera is intentionally not probed.
     """
     if _resource_pool is None:
         raise HTTPException(status_code=503, detail="Resource pool not initialized")
     
-    camera_available = await asyncio.to_thread(_resource_pool.is_camera_available)
-    camera_status = "available" if camera_available else "unavailable"
     face_model_loaded = getattr(request.app.state, "face_model_loaded", False)
+    object_model_loaded = getattr(request.app.state, "object_model_loaded", False)
+    object_status = (
+        "disabled" if not Config.ENABLE_OBJECT_DETECTION
+        else "loaded" if object_model_loaded
+        else "unavailable"
+    )
+    models_ready = face_model_loaded and object_status in {"loaded", "disabled"}
     emotion_status = "disabled"
     
     return HealthCheckResponse(
-        status="healthy" if camera_available and face_model_loaded else "degraded",
-        camera=camera_status,
+        status="healthy" if models_ready else "degraded",
+        camera="not_checked",
         face_model="loaded" if face_model_loaded else "unavailable",
+        object_model=object_status,
         opencv_version=cv2.__version__,
         emotion_detection=emotion_status,
         timestamp=datetime.utcnow().isoformat()

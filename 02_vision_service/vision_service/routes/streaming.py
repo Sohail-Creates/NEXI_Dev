@@ -13,6 +13,8 @@ from fastapi.responses import StreamingResponse, HTMLResponse
 
 from ..config import Config
 from ..services.resource_pool import ResourcePool
+from ..services.inference import INFERENCE_SLOTS
+from ..services.face_detector import detect_faces_deepface, NoFaceDetected
 from .camera import is_camera_paused
 
 logger = logging.getLogger(__name__)
@@ -78,14 +80,8 @@ def generate_frames():
                 # Detect faces every 5 frames for performance
                 if frame_count % 5 == 0:
                     try:
-                        from deepface import DeepFace
-                        
-                        face_objs = DeepFace.extract_faces(
-                            img_path=frame,
-                            detector_backend=Config.DETECTOR_BACKEND,
-                            enforce_detection=False,
-                            align=True
-                        )
+                        with INFERENCE_SLOTS:
+                            face_objs = detect_faces_deepface(frame, Config.DETECTOR_BACKEND)
                         
                         # Draw boxes on frame
                         for face_obj in face_objs:
@@ -102,6 +98,9 @@ def generate_frames():
                         latest_face_data['face_count'] = len(face_objs)
                         latest_face_data['last_update'] = datetime.now().isoformat()
                         
+                    except NoFaceDetected:
+                        latest_face_data['face_count'] = 0
+                        latest_face_data['last_update'] = datetime.now().isoformat()
                     except Exception as e:
                         logger.debug(f"Stream detection error: {e}")
                         cv2.putText(frame, "Detection Error", (10, 30),

@@ -27,3 +27,5 @@ scikit-image==0.21.0
 # Utils
 numpy==1.26.4
 scipy==1.11.2
+requests==2.34.2
+psutil==7.2.2

@@ -16,9 +16,12 @@ from PIL import Image
 from ..models import FaceDetectionResponse, CompleteAnalysisResponse, FaceData, BoundingBox, ObjectDetectionResponse, DetectedObject
 from ..config import Config
 from ..services.resource_pool import ResourcePool
+from ..services.inference import INFERENCE_SLOTS
 from ..services.face_detector import (
     detect_faces_deepface,
     process_face,
+    NoFaceDetected,
+    FaceEmbeddingError,
     require_deepface,
     validate_detector_backend,
     validate_embedding_model
@@ -29,6 +32,47 @@ router = APIRouter()
 
 # Global resource pool reference (set by app.py)
 _resource_pool = None
+
+
+class ObjectInferenceError(RuntimeError):
+    """Raised when object inference is unavailable or fails unexpectedly."""
+
+
+def _process_faces(frame, detector_backend: str, model_name: str):
+    """Run face detection/embedding; distinguish no-face from model failure."""
+    try:
+        face_objs = detect_faces_deepface(frame, detector_backend)
+    except NoFaceDetected:
+        return []
+
+    faces = []
+    for index, face_obj in enumerate(face_objs):
+        face_data = process_face(face_obj, index, model_name)
+        faces.append(FaceData(
+            face_id=face_data["face_id"],
+            bounding_box=BoundingBox(**face_data["bounding_box"]),
+            confidence=face_data["confidence"],
+            embedding=face_data["embedding"],
+            embedding_model=face_data["embedding_model"],
+        ))
+    return faces
+
+
+def _inference_error(exc: Exception):
+    if isinstance(exc, FaceEmbeddingError):
+        return HTTPException(
+            status_code=500,
+            detail={"code": "EMBEDDING_FAILED", "message": str(exc)},
+        )
+    if isinstance(exc, ObjectInferenceError):
+        return HTTPException(
+            status_code=503,
+            detail={"code": "OBJECT_INFERENCE_FAILED", "message": str(exc)},
+        )
+    return HTTPException(
+        status_code=500,
+        detail={"code": "FACE_INFERENCE_FAILED", "message": "Face inference failed"},
+    )
 
 
 def set_resource_pool(pool: ResourcePool):
@@ -64,7 +108,7 @@ async def capture_call_frame(lease_id: str = Query(..., min_length=1)):
 
 
 @router.post("/detect/faces", response_model=FaceDetectionResponse)
-async def detect_faces_from_camera(
+def detect_faces_from_camera(
     detector_backend: str = Query(default=Config.DETECTOR_BACKEND, description="Face detection algorithm"),
     model_name: str = Query(default=Config.EMBEDDING_MODEL, description="Embedding model name"),
 ):
@@ -97,34 +141,15 @@ async def detect_faces_from_camera(
             
             frame_height, frame_width = frame.shape[:2]
             
-            # Detect faces
-            face_objs = detect_faces_deepface(frame, detector_backend)
-            
-            # Process each face
-            faces_data = []
-            for idx, face_obj in enumerate(face_objs):
-                try:
-                    face_data = process_face(
-                        face_obj, idx, model_name
-                    )
-                    
-                    # Convert to response model
-                    response_face = FaceData(
-                        face_id=face_data['face_id'],
-                        bounding_box=BoundingBox(**face_data['bounding_box']),
-                        confidence=face_data['confidence'],
-                        embedding=face_data['embedding'],
-                        embedding_model=face_data['embedding_model'],
-                        dominant_emotion=None,
-                        emotion_scores=None
-                    )
-                    faces_data.append(response_face)
-                except Exception as e:
-                    logger.error(f"Error processing face {idx}: {e}")
-                    continue
+            try:
+                with INFERENCE_SLOTS:
+                    faces_data = _process_faces(frame, detector_backend, model_name)
+            except Exception as exc:
+                logger.exception("Camera face inference failed")
+                raise _inference_error(exc) from exc
             
             return FaceDetectionResponse(
-                status="success",
+                status="success" if faces_data else "no_face_detected",
                 timestamp=datetime.utcnow().isoformat(),
                 frame_width=frame_width,
                 frame_height=frame_height,
@@ -149,7 +174,7 @@ async def detect_faces_from_camera(
 
 
 @router.post("/detect/faces/upload", response_model=FaceDetectionResponse)
-async def detect_faces_from_upload(
+def detect_faces_from_upload(
     file: UploadFile = File(...),
     detector_backend: str = Query(default=Config.DETECTOR_BACKEND),
     model_name: str = Query(default=Config.EMBEDDING_MODEL)
@@ -176,32 +201,15 @@ async def detect_faces_from_upload(
         
         frame_height, frame_width = img.shape[:2]
         
-        face_objs = detect_faces_deepface(img, detector_backend)
-        
-        # Process each face
-        faces_data = []
-        for idx, face_obj in enumerate(face_objs):
-            try:
-                face_data = process_face(
-                    face_obj, idx, model_name
-                )
-                
-                response_face = FaceData(
-                    face_id=face_data['face_id'],
-                    bounding_box=BoundingBox(**face_data['bounding_box']),
-                    confidence=face_data['confidence'],
-                    embedding=face_data['embedding'],
-                    embedding_model=face_data['embedding_model'],
-                    dominant_emotion=None,
-                    emotion_scores=None
-                )
-                faces_data.append(response_face)
-            except Exception as e:
-                logger.error(f"Error processing face {idx}: {e}")
-                continue
+        try:
+            with INFERENCE_SLOTS:
+                faces_data = _process_faces(img, detector_backend, model_name)
+        except Exception as exc:
+            logger.exception("Uploaded-image face inference failed")
+            raise _inference_error(exc) from exc
         
         return FaceDetectionResponse(
-            status="success",
+            status="success" if faces_data else "no_face_detected",
             timestamp=datetime.utcnow().isoformat(),
             frame_width=frame_width,
             frame_height=frame_height,
@@ -215,13 +223,17 @@ async def detect_faces_from_upload(
             status_code=503,
             detail={"code": "FACE_MODEL_UNAVAILABLE", "message": str(e)},
         ) from e
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Upload processing error: {e}")
-        raise HTTPException(status_code=400, detail=f"Upload processing failed: {str(e)}")
+        logger.exception("Upload processing failed")
+        raise HTTPException(status_code=500, detail="Upload processing failed") from e
 
 
 @router.post("/analyze/complete", response_model=CompleteAnalysisResponse)
-async def complete_analysis(
+def complete_analysis(
     detector_backend: str = Query(default=Config.DETECTOR_BACKEND),
     model_name: str = Query(default=Config.EMBEDDING_MODEL)
 ):
@@ -245,37 +257,21 @@ async def complete_analysis(
             
             frame_height, frame_width = frame.shape[:2]
             
-            # Detect faces
-            face_objs = detect_faces_deepface(frame, detector_backend)
-            
-            # Process each face
-            faces_data = []
-            for idx, face_obj in enumerate(face_objs):
-                try:
-                    face_data = process_face(
-                        face_obj, idx, model_name
-                    )
-                    
-                    response_face = FaceData(
-                        face_id=face_data['face_id'],
-                        bounding_box=BoundingBox(**face_data['bounding_box']),
-                        confidence=face_data['confidence'],
-                        embedding=face_data['embedding'],
-                        embedding_model=face_data['embedding_model'],
-                        dominant_emotion=None,
-                        emotion_scores=None
-                    )
-                    faces_data.append(response_face)
-                except Exception as e:
-                    logger.error(f"Error processing face {idx}: {e}")
-                    continue
-            
-            # Detect Objects
-            detector = _resource_pool.get_object_detector()
-            object_results = detector.detect(frame) if detector is not None else {"detections": []}
+            try:
+                with INFERENCE_SLOTS:
+                    faces_data = _process_faces(frame, detector_backend, model_name)
+                    detector = _resource_pool.get_object_detector()
+                    if detector is None:
+                        raise ObjectInferenceError("Object detector is unavailable")
+                    object_results = detector.detect(frame)
+                    if object_results is None:
+                        raise ObjectInferenceError("Object detection inference failed")
+            except Exception as exc:
+                logger.exception("Complete analysis inference failed")
+                raise _inference_error(exc) from exc
             
             return CompleteAnalysisResponse(
-                status="success",
+                status="success" if faces_data else "no_face_detected",
                 timestamp=datetime.utcnow().isoformat(),
                 frame_width=frame_width,
                 frame_height=frame_height,
