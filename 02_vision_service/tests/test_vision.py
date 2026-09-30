@@ -80,6 +80,22 @@ def test_complete_analysis_contract() -> str:
     return f"{data['status']}; faces={data['faces_detected']}; objects={data['objects_detected']}"
 
 
+def test_object_detection_embedding_contract() -> str:
+    response = CLIENT.post(f"{BASE_URL}/api/v1/detect/objects", timeout=TIMEOUT)
+    require_success(response)
+    data = response.json()
+    assert data.get("objects_detected") == len(data.get("detections", [])), data
+    for detection in data.get("detections", []):
+        embedding = detection.get("embedding")
+        dimension = detection.get("embedding_dimension")
+        assert isinstance(embedding, list) and len(embedding) == dimension, detection
+        assert detection.get("embedding_model"), detection
+        assert all(isinstance(value, (int, float)) for value in embedding), detection
+        norm = sum(float(value) ** 2 for value in embedding) ** 0.5
+        assert abs(norm - 1.0) < 1e-4, detection
+    return f"{data['status']}; objects={data['objects_detected']}; embeddings validated"
+
+
 def test_camera_controls() -> str:
     paused = CLIENT.post(f"{BASE_URL}/camera/pause", timeout=5)
     require_success(paused)
@@ -103,6 +119,7 @@ def main() -> int:
         ("Health and model readiness", test_health),
         ("Face detection response contract", test_face_detection),
         ("Combined analysis response contract", test_complete_analysis_contract),
+        ("Object-only detection and embedding contract", test_object_detection_embedding_contract),
         ("Camera control contract", test_camera_controls),
         ("Authenticated live UI", test_live_ui),
     ]

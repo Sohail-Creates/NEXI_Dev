@@ -27,6 +27,9 @@ class DetectedObject(BaseModel):
     class_name: str
     confidence: float
     bounding_box: BoundingBox
+    embedding: List[float]
+    embedding_model: str
+    embedding_dimension: int
 
 class ObjectDetectionResponse(BaseModel):
     status: str

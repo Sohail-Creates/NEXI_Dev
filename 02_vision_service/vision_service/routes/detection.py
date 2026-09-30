@@ -17,6 +17,7 @@ from ..models import FaceDetectionResponse, CompleteAnalysisResponse, FaceData, 
 from ..config import Config
 from ..services.resource_pool import ResourcePool
 from ..services.inference import INFERENCE_SLOTS
+from ..services.object_detector import ObjectEmbeddingError
 from ..services.face_detector import (
     detect_faces_deepface,
     process_face,
@@ -58,6 +59,17 @@ def _process_faces(frame, detector_backend: str, model_name: str):
     return faces
 
 
+def _process_objects(frame):
+    """Run only YOLO object detection and its per-box visual embedding."""
+    detector = _resource_pool.get_object_detector()
+    if detector is None:
+        raise ObjectInferenceError("Object detector is unavailable")
+    results = detector.detect(frame)
+    if results is None:
+        raise ObjectInferenceError("Object detection inference failed")
+    return results
+
+
 def _inference_error(exc: Exception):
     if isinstance(exc, FaceEmbeddingError):
         return HTTPException(
@@ -69,10 +81,50 @@ def _inference_error(exc: Exception):
             status_code=503,
             detail={"code": "OBJECT_INFERENCE_FAILED", "message": str(exc)},
         )
+    if isinstance(exc, ObjectEmbeddingError):
+        return HTTPException(
+            status_code=500,
+            detail={"code": "OBJECT_EMBEDDING_FAILED", "message": str(exc)},
+        )
     return HTTPException(
         status_code=500,
         detail={"code": "FACE_INFERENCE_FAILED", "message": "Face inference failed"},
     )
+
+
+@router.post("/detect/objects", response_model=ObjectDetectionResponse)
+def detect_objects_from_camera():
+    """Detect and embed camera objects without invoking the face pipeline."""
+    if _resource_pool is None:
+        raise HTTPException(status_code=500, detail="Resource pool not initialized")
+
+    try:
+        with _resource_pool.get_camera(timeout=Config.CAMERA_TIMEOUT) as camera:
+            success, frame = camera.read()
+            if not success:
+                raise HTTPException(status_code=503, detail="Camera frame unavailable")
+            frame_height, frame_width = frame.shape[:2]
+            try:
+                with INFERENCE_SLOTS:
+                    object_results = _process_objects(frame)
+            except Exception as exc:
+                logger.exception("Object detection and embedding failed")
+                raise _inference_error(exc) from exc
+
+        detections = object_results.get("detections", [])
+        return ObjectDetectionResponse(
+            status="success" if detections else "no_objects_detected",
+            timestamp=datetime.utcnow().isoformat(),
+            frame_width=frame_width,
+            frame_height=frame_height,
+            objects_detected=len(detections),
+            detections=[DetectedObject(**detection) for detection in detections],
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Object detection route failed")
+        raise HTTPException(status_code=500, detail="Object detection failed") from exc
 
 
 def set_resource_pool(pool: ResourcePool):
@@ -260,12 +312,7 @@ def complete_analysis(
             try:
                 with INFERENCE_SLOTS:
                     faces_data = _process_faces(frame, detector_backend, model_name)
-                    detector = _resource_pool.get_object_detector()
-                    if detector is None:
-                        raise ObjectInferenceError("Object detector is unavailable")
-                    object_results = detector.detect(frame)
-                    if object_results is None:
-                        raise ObjectInferenceError("Object detection inference failed")
+                    object_results = _process_objects(frame)
             except Exception as exc:
                 logger.exception("Complete analysis inference failed")
                 raise _inference_error(exc) from exc

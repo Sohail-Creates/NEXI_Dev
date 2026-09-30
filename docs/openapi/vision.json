@@ -131,13 +131,31 @@
           "confidence": {
             "title": "Confidence",
             "type": "number"
+          },
+          "embedding": {
+            "items": {
+              "type": "number"
+            },
+            "title": "Embedding",
+            "type": "array"
+          },
+          "embedding_dimension": {
+            "title": "Embedding Dimension",
+            "type": "integer"
+          },
+          "embedding_model": {
+            "title": "Embedding Model",
+            "type": "string"
           }
         },
         "required": [
           "class_id",
           "class_name",
           "confidence",
-          "bounding_box"
+          "bounding_box",
+          "embedding",
+          "embedding_model",
+          "embedding_dimension"
         ],
         "title": "DetectedObject",
         "type": "object"
@@ -346,6 +364,47 @@
           "timestamp"
         ],
         "title": "HealthCheckResponse",
+        "type": "object"
+      },
+      "ObjectDetectionResponse": {
+        "properties": {
+          "detections": {
+            "items": {
+              "$ref": "#/components/schemas/DetectedObject"
+            },
+            "title": "Detections",
+            "type": "array"
+          },
+          "frame_height": {
+            "title": "Frame Height",
+            "type": "integer"
+          },
+          "frame_width": {
+            "title": "Frame Width",
+            "type": "integer"
+          },
+          "objects_detected": {
+            "title": "Objects Detected",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "timestamp": {
+            "title": "Timestamp",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "timestamp",
+          "frame_width",
+          "frame_height",
+          "objects_detected",
+          "detections"
+        ],
+        "title": "ObjectDetectionResponse",
         "type": "object"
       },
       "ServiceHealthResponse": {
@@ -1023,6 +1082,108 @@
         ]
       }
     },
+    "/api/v1/detect/objects": {
+      "post": {
+        "description": "Detect and embed camera objects without invoking the face pipeline.",
+        "operationId": "detect_objects_from_camera_api_v1_detect_objects_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectDetectionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Error response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Error response"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Error response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Error response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Error response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Error response"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Error response"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Error response"
+          }
+        },
+        "summary": "Detect Objects From Camera",
+        "tags": [
+          "Face Detection"
+        ]
+      }
+    },
     "/api/v1/frame": {
       "get": {
         "description": "Capture one JPEG through the existing camera context using a call lease.",
@@ -1342,7 +1503,7 @@
     },
     "/health": {
       "get": {
-        "description": "Detailed health check endpoint\nReport the model initialization result and actual camera availability.",
+        "description": "Detailed health check endpoint\nReturn readiness without acquiring hardware; camera is intentionally not probed.",
         "operationId": "health_check_detailed_health_get",
         "responses": {
           "200": {
@@ -1642,11 +1803,5 @@
         ]
       }
     }
-  },
-  "servers": [
-    {
-      "description": "Local service (TLS)",
-      "url": "https://localhost:8001"
-    }
-  ]
+  }
 }
