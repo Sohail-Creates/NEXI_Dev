@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 import sys
 from types import MethodType, SimpleNamespace
@@ -32,9 +33,51 @@ from shared.clients.models import ServiceCallResult
 from shared.semantic_embeddings import SEMANTIC_EMBEDDING_DIMENSION
 from teachme_connector import TeachMeConnector
 from teachme_service.config import search_index_config
+from teachme_service.models import KnowledgeItem, LearningType, ObjectData
+from teachme_service.object_processor import ObjectProcessor
+from teachme_service.sqlite_store import KnowledgeStore, initialize
 
 
 pytestmark = pytest.mark.contract
+
+
+@pytest.mark.asyncio
+async def test_taught_object_keeps_visual_and_semantic_vectors_separate(tmp_path) -> None:
+    class VisionStub:
+        async def get_vision_attributes(self, name):
+            assert name == "bottle"
+            return {"detections": [
+                {"class_name": "bottle", "confidence": 0.9,
+                 "bounding_box": {"x": 1, "y": 2, "width": 20, "height": 30},
+                 "embedding": [0.125] * 64},
+                {"class_name": "person", "confidence": 0.8,
+                 "bounding_box": {"x": 2, "y": 3, "width": 40, "height": 50},
+                 "embedding": [0.25] * 64},
+            ]}
+
+    processor = ObjectProcessor()
+    processor.vision_connector = VisionStub()
+    processed = await processor.process_object_async(ObjectData(name="bottle"))
+    assert processed.visual_embedding == [0.125] * 64
+    assert "visual_embedding" not in processed.attributes
+    assert processed.attributes["detected_class"] == "bottle"
+    now = datetime.utcnow()
+    item = KnowledgeItem(id="test", type=LearningType.OBJECT, data=processed,
+                         tags=[], confidence=1.0, created_at=now, updated_at=now,
+                         embedding=[0.5] * 384, visual_embedding=processed.visual_embedding)
+    reloaded = KnowledgeItem.model_validate(item.model_dump(mode="json"))
+    assert len(reloaded.embedding) == 384 and len(reloaded.visual_embedding) == 64
+    assert "visual_embedding" not in reloaded.data.model_dump()
+    database = tmp_path / "knowledge.sqlite3"
+    initialize(database)
+    store = KnowledgeStore(database)
+    store.save({}, {item.id: item.model_dump(mode="json")}, {})
+    persisted = KnowledgeItem.model_validate(store.read()["storage"][item.id])
+    assert len(persisted.embedding) == 384 and persisted.visual_embedding == [0.125] * 64
+    old = KnowledgeItem.model_validate({key: value for key, value in item.model_dump(mode="json").items()
+                                        if key != "visual_embedding"})
+    assert old.visual_embedding is None and len(old.embedding) == 384
+    assert "visual_embedding" not in old.model_dump(mode="json")
 
 
 def _fault(name: str) -> bool:

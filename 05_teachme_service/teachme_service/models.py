@@ -12,6 +12,9 @@ class ObjectData(BaseModel):
     attributes: Dict[str, Any] = Field(default_factory=dict, description="Object attributes")
     category: Optional[str] = Field(None, description="Object category")
     description: Optional[str] = Field(None, description="Object description")
+    # Transient Vision result. Persist it once on KnowledgeItem, outside the
+    # 384-dimensional semantic embedding and the text-derived attributes.
+    visual_embedding: Optional[List[float]] = Field(None, min_length=64, max_length=64, exclude=True)
 
 class FactData(BaseModel):
     subject: str = Field(..., description="Subject of the fact")
@@ -34,6 +37,10 @@ class KnowledgeItem(BaseModel):
     created_at: datetime
     updated_at: datetime
     embedding: Optional[List[float]] = Field(None, description="Vector embedding for similarity search")
+    visual_embedding: Optional[List[float]] = Field(
+        None, min_length=64, max_length=64, exclude_if=lambda value: value is None,
+        description="Vision P3 object features",
+    )
     
     def dict(self, **kwargs):
         """Override dict method to convert datetime to ISO format strings"""

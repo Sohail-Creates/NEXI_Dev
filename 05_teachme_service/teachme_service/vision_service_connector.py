@@ -88,12 +88,10 @@ class VisionServiceConnector:
                 start_time = datetime.utcnow()
                 
                 async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=client_ssl_context(self.base_url))) as session:
-                    url = f"{self.base_url}{vision_config.ANALYZE_ENDPOINT}"
-                    payload = {"object_name": object_name}
+                    url = f"{self.base_url}{vision_config.OBJECT_DETECTION_ENDPOINT}"
                     
                     async with session.post(
                         url,
-                        json=payload,
                         headers=internal_service_headers(),
                         timeout=aiohttp.ClientTimeout(total=timeout)
                     ) as response:

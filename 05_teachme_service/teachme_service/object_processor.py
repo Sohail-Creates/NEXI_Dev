@@ -67,7 +67,8 @@ class ObjectProcessor:
             name=object_data.name,
             attributes=enhanced_attributes,
             category=object_data.category or detected_category,
-            description=object_data.description or self._generate_description(object_data.name, enhanced_attributes)
+            description=object_data.description or self._generate_description(object_data.name, enhanced_attributes),
+            visual_embedding=vision_attributes.get('visual_embedding') if vision_attributes.get('vision_detected') else None,
         )
     
     async def process_object_async(self, object_data: ObjectData) -> ObjectData:
@@ -88,7 +89,8 @@ class ObjectProcessor:
             name=object_data.name,
             attributes=enhanced_attributes,
             category=object_data.category or detected_category,
-            description=object_data.description or self._generate_description(object_data.name, enhanced_attributes)
+            description=object_data.description or self._generate_description(object_data.name, enhanced_attributes),
+            visual_embedding=vision_attributes.get('visual_embedding') if vision_attributes.get('vision_detected') else None,
         )
     
     def _get_vision_attributes(self, object_name: str) -> Dict[str, Any]:
@@ -141,8 +143,8 @@ class ObjectProcessor:
             
             # Process vision data
             vision_result = result[0]
-            if isinstance(vision_result, dict) and vision_result.get('objects'):
-                objects_detected = vision_result.get('objects', [])
+            if isinstance(vision_result, dict) and vision_result.get('detections'):
+                objects_detected = vision_result.get('detections', [])
                 logger.info(f"Vision Service detected {len(objects_detected)} objects")
                 
                 object_name_lower = object_name.lower().strip()
@@ -158,8 +160,10 @@ class ObjectProcessor:
                         'bounding_box': bbox,
                         'vision_detected': True,
                     }
-                    # Cache the result
-                    self.vision_cache[cache_key] = result_data
+                    visual_embedding = matched_object.get('embedding')
+                    if visual_embedding is not None:
+                        result_data['visual_embedding'] = visual_embedding
+                    # A visual vector belongs to this camera observation, not a name cache.
                     logger.info(f" MATCHED: '{object_name}' found (conf: {result_data['confidence']:.2f})")
                     return result_data
                 else:
@@ -195,8 +199,8 @@ class ObjectProcessor:
                 return self._get_mock_vision_attributes(object_name)
             
             # Process vision data
-            if isinstance(vision_data, dict) and vision_data.get('objects'):
-                objects_detected = vision_data.get('objects', [])
+            if isinstance(vision_data, dict) and vision_data.get('detections'):
+                objects_detected = vision_data.get('detections', [])
                 logger.info(f"[Async] Vision Service detected {len(objects_detected)} objects")
                 
                 object_name_lower = object_name.lower().strip()
@@ -212,8 +216,10 @@ class ObjectProcessor:
                         'bounding_box': bbox,
                         'vision_detected': True,
                     }
-                    # Cache the result
-                    self.vision_cache[cache_key] = result_data
+                    visual_embedding = matched_object.get('embedding')
+                    if visual_embedding is not None:
+                        result_data['visual_embedding'] = visual_embedding
+                    # A visual vector belongs to this camera observation, not a name cache.
                     logger.info(f"[Async]  MATCHED: '{object_name}' found (conf: {result_data['confidence']:.2f})")
                     return result_data
                 else:
@@ -367,6 +373,8 @@ class ObjectProcessor:
         if vision_attributes.get('vision_detected', False):
             # Overwrite with vision data
             for key, value in vision_attributes.items():
+                if key == 'visual_embedding':
+                    continue
                 if key not in enhanced or key in ['color', 'shape', 'size_cm']:
                     enhanced[key] = value
         else:

@@ -175,7 +175,8 @@ class PersistentKnowledgeBase:
             confidence=confidence,
             created_at=now,
             updated_at=now,
-            embedding=embedding  # Add embedding if provided
+            embedding=embedding,  # Semantic text embedding for the existing index
+            visual_embedding=object_data.visual_embedding,
         )
         
         self._storage[item_id] = knowledge_item  # Single source of truth

@@ -22,6 +22,7 @@ class VisionServiceConfig:
     
     # Vision API endpoints
     ANALYZE_ENDPOINT: str = "/api/v1/analyze/complete"
+    OBJECT_DETECTION_ENDPOINT: str = "/api/v1/detect/objects"
     HEALTH_ENDPOINT: str = "/health"
     
     # Vision analysis parameters
