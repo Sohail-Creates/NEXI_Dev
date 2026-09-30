@@ -35,6 +35,9 @@ class ObjectData(BaseModel):
     attributes: Dict[str, Any] = Field(default_factory=dict)
     category: Optional[str] = None
     description: Optional[str] = None
+    # Additive passthrough: the selected Vision detection is validated by
+    # TeachMe and prevents a second, nondeterministic camera observation.
+    vision_observation: Optional[Dict[str, Any]] = None
 
 
 class FactData(BaseModel):

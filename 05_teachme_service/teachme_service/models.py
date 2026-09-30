@@ -1,11 +1,37 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Dict, List, Optional, Any, Union
 from datetime import datetime
 from enum import Enum
+import math
 
 class LearningType(str, Enum):
     OBJECT = "object"
     FACT = "fact"
+
+
+class VisionObservation(BaseModel):
+    """One selected Vision detection, kept intact across the teach request."""
+    class_id: int = Field(ge=0)
+    class_name: str = Field(min_length=1)
+    confidence: float = Field(ge=0, le=1, allow_inf_nan=False)
+    bounding_box: Dict[str, int]
+    embedding: List[float] = Field(min_length=64, max_length=64)
+    embedding_model: str = Field(min_length=1)
+    embedding_dimension: int = Field(default=64, ge=64, le=64)
+
+    @field_validator("bounding_box")
+    @classmethod
+    def valid_box(cls, box: Dict[str, int]) -> Dict[str, int]:
+        if set(box) != {"x", "y", "width", "height"} or box["x"] < 0 or box["y"] < 0 or box["width"] <= 0 or box["height"] <= 0:
+            raise ValueError("Vision observation requires a positive x/y/width/height box")
+        return box
+
+    @field_validator("embedding")
+    @classmethod
+    def finite_embedding(cls, values: List[float]) -> List[float]:
+        if not all(math.isfinite(value) for value in values) or math.fsum(value * value for value in values) <= 0:
+            raise ValueError("Vision observation embedding must be finite and nonzero")
+        return values
 
 class ObjectData(BaseModel):
     name: str = Field(..., description="Name of the object")
@@ -15,6 +41,7 @@ class ObjectData(BaseModel):
     # Transient Vision result. Persist it once on KnowledgeItem, outside the
     # 384-dimensional semantic embedding and the text-derived attributes.
     visual_embedding: Optional[List[float]] = Field(None, min_length=64, max_length=64, exclude=True)
+    vision_observation: Optional[VisionObservation] = Field(None, exclude=True)
 
 class FactData(BaseModel):
     subject: str = Field(..., description="Subject of the fact")

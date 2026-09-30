@@ -18,7 +18,8 @@ CENTRAL = ROOT / "01_central_server"
 ENROLLMENT = ROOT / "06_enrollment_service"
 AUDIO = ROOT / "03_audio_service"
 TEACHME = ROOT / "05_teachme_service"
-sys.path[:0] = [str(ROOT), str(CENTRAL), str(ENROLLMENT), str(AUDIO), str(TEACHME)]
+VISION = ROOT / "02_vision_service"
+sys.path[:0] = [str(ROOT), str(CENTRAL), str(ENROLLMENT), str(AUDIO), str(TEACHME), str(VISION)]
 
 os.environ.setdefault("AUTH_ENFORCEMENT_ENABLED", "true")
 os.environ.setdefault("NEXI_INTERNAL_SERVICE_TOKEN", "phase8-contract-service-token")
@@ -78,6 +79,63 @@ async def test_taught_object_keeps_visual_and_semantic_vectors_separate(tmp_path
                                         if key != "visual_embedding"})
     assert old.visual_embedding is None and len(old.embedding) == 384
     assert "visual_embedding" not in old.model_dump(mode="json")
+
+
+@pytest.mark.asyncio
+async def test_selected_vision_observation_skips_second_capture() -> None:
+    from pydantic import ValidationError
+
+    class NoSecondCapture:
+        async def get_vision_attributes(self, name):
+            raise AssertionError("Vision must not capture again for a selected observation")
+
+    observation = {
+        "class_id": 40, "class_name": "wine glass", "confidence": 0.85,
+        "bounding_box": {"x": 10, "y": 20, "width": 30, "height": 40},
+        "embedding": [0.125] * 64, "embedding_model": "yolov8n-p3-roi-avg-v1",
+        "embedding_dimension": 64,
+    }
+    processor = ObjectProcessor()
+    processor.vision_connector = NoSecondCapture()
+    processed = await processor.process_object_async(
+        ObjectData(name="My glass", attributes={"bounding_box": {"x": 999}, "detected_class": "wrong"},
+                   vision_observation=observation)
+    )
+    assert processed.visual_embedding == observation["embedding"]
+    assert processed.attributes["detected_class"] == "wine glass"
+    assert processed.attributes["bounding_box"] == observation["bounding_box"]
+    assert processed.attributes["detected_class"] == observation["class_name"]
+    assert "vision_observation" not in processed.model_dump()
+
+    with pytest.raises(ValidationError):
+        ObjectData(name="bad", vision_observation={**observation, "embedding": [0.1] * 63})
+    with pytest.raises(ValidationError):
+        ObjectData(name="bad", vision_observation={**observation, "embedding": [float("nan")] * 64})
+    with pytest.raises(ValidationError):
+        ObjectData(name="bad", vision_observation={**observation, "embedding": [0.0] * 64})
+
+
+def test_object_upload_distinguishes_bad_image_from_model_failure(monkeypatch) -> None:
+    import io
+    import cv2
+    import numpy as np
+    from fastapi import HTTPException, UploadFile
+    from vision_service.routes import detection
+
+    monkeypatch.setattr(detection, "_resource_pool", SimpleNamespace(
+        get_object_detector=lambda: SimpleNamespace(detect=lambda image: None)
+    ))
+    with pytest.raises(HTTPException) as bad_image:
+        detection.detect_objects_from_upload(UploadFile(file=io.BytesIO(b"bad"), filename="bad.png"))
+    assert bad_image.value.status_code == 400
+    assert bad_image.value.detail["code"] == "INVALID_IMAGE"
+
+    encoded, image = cv2.imencode(".png", np.zeros((32, 32, 3), dtype=np.uint8))
+    assert encoded
+    with pytest.raises(HTTPException) as model_error:
+        detection.detect_objects_from_upload(UploadFile(file=io.BytesIO(image.tobytes()), filename="valid.png"))
+    assert model_error.value.status_code == 503
+    assert model_error.value.detail["code"] == "OBJECT_INFERENCE_FAILED"
 
 
 def _fault(name: str) -> bool:

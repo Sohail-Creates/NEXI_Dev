@@ -788,6 +788,25 @@ def _interactive_teach(console: "Sprint2Console") -> LiveResponse:
             "description": input("Description (optional): ").strip() or None,
             "attributes": {},
         }
+        observation = console.client.request(
+            "vision", "POST", "/api/v1/detect/objects", internal=True, display=False
+        )
+        detections = (
+            observation.body.get("detections", [])
+            if observation.ok and isinstance(observation.body, Mapping) else []
+        )
+        if detections:
+            print("Detected objects:")
+            for index, detected in enumerate(detections, 1):
+                print(f"  {index}. {detected.get('class_name', 'object')} "
+                      f"({detected.get('confidence', 0):.2f})")
+            choice = input("Object number to teach (ENTER skips selection): ").strip()
+            if choice:
+                if not choice.isdecimal() or not 1 <= int(choice) <= len(detections):
+                    raise ValueError("Choose a listed object number")
+                data["vision_observation"] = detections[int(choice) - 1]
+        else:
+            print("No object selected; TeachMe will use its existing capture path.")
     else:
         raise ValueError("Choose fact or object")
     return console.teach(item_type, data)

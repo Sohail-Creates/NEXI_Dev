@@ -8,6 +8,7 @@ import numpy as np
 import logging
 import math
 import threading
+import time
 from typing import Optional, Dict, List, Tuple
 from pathlib import Path
 
@@ -102,6 +103,9 @@ class ObjectDetector:
         try:
             import torch
 
+            started = time.perf_counter()
+            embedding_seconds = 0.0
+
             # Capture the P3 feature map from the same forward pass as detection.
             # The pinned YOLOv8n Detect head consumes layers [15, 18, 21]; its
             # first input is the stride-8 feature map used for object-level ROIs.
@@ -126,6 +130,7 @@ class ObjectDetector:
                 finally:
                     input_hook.remove()
                     p3_hook.remove()
+                detection_seconds = time.perf_counter() - started
 
                 feature_map = capture.get("p3")
                 input_hw = capture.get("input_hw")
@@ -175,6 +180,7 @@ class ObjectDetector:
                     width = x2 - x1
                     height = y2 - y1
 
+                    embedding_started = time.perf_counter()
                     embedding = self._roi_embedding(
                         image=image,
                         feature_map=feature_map,
@@ -182,6 +188,7 @@ class ObjectDetector:
                         stride=stride,
                         bbox=(x1, y1, x2, y2),
                     )
+                    embedding_seconds += time.perf_counter() - embedding_started
 
                     detection = {
                         "class_id": class_id,
@@ -204,6 +211,11 @@ class ObjectDetector:
                 except Exception as e:
                     raise RuntimeError("Failed to decode YOLO detection output") from e
             
+            logger.info(
+                "Object inference detection_ms=%.1f embedding_ms=%.1f total_ms=%.1f objects=%d",
+                detection_seconds * 1000, embedding_seconds * 1000,
+                (time.perf_counter() - started) * 1000, len(detections),
+            )
             return {
                 "objects_detected": len(detections),
                 "detections": detections

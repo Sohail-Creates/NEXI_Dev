@@ -70,6 +70,19 @@ def _process_objects(frame):
     return results
 
 
+def _object_response(frame, object_results):
+    detections = object_results.get("detections", [])
+    frame_height, frame_width = frame.shape[:2]
+    return ObjectDetectionResponse(
+        status="success" if detections else "no_objects_detected",
+        timestamp=datetime.utcnow().isoformat(),
+        frame_width=frame_width,
+        frame_height=frame_height,
+        objects_detected=len(detections),
+        detections=[DetectedObject(**detection) for detection in detections],
+    )
+
+
 def _inference_error(exc: Exception):
     if isinstance(exc, FaceEmbeddingError):
         return HTTPException(
@@ -103,7 +116,6 @@ def detect_objects_from_camera():
             success, frame = camera.read()
             if not success:
                 raise HTTPException(status_code=503, detail="Camera frame unavailable")
-            frame_height, frame_width = frame.shape[:2]
             try:
                 with INFERENCE_SLOTS:
                     object_results = _process_objects(frame)
@@ -111,20 +123,38 @@ def detect_objects_from_camera():
                 logger.exception("Object detection and embedding failed")
                 raise _inference_error(exc) from exc
 
-        detections = object_results.get("detections", [])
-        return ObjectDetectionResponse(
-            status="success" if detections else "no_objects_detected",
-            timestamp=datetime.utcnow().isoformat(),
-            frame_width=frame_width,
-            frame_height=frame_height,
-            objects_detected=len(detections),
-            detections=[DetectedObject(**detection) for detection in detections],
-        )
+        return _object_response(frame, object_results)
     except HTTPException:
         raise
     except Exception as exc:
         logger.exception("Object detection route failed")
         raise HTTPException(status_code=500, detail="Object detection failed") from exc
+
+
+@router.post("/detect/objects/upload", response_model=ObjectDetectionResponse)
+def detect_objects_from_upload(file: UploadFile = File(...)):
+    """Object-only detection on an uploaded photo; same model and vector path as camera."""
+    if _resource_pool is None:
+        raise HTTPException(status_code=503, detail="Resource pool not initialized")
+    contents = file.file.read(Config.MAX_OBJECT_UPLOAD_BYTES + 1)
+    if len(contents) > Config.MAX_OBJECT_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail={"code": "INVALID_IMAGE", "message": "Image upload is too large"})
+    try:
+        with Image.open(io.BytesIO(contents)) as header:
+            width, height = header.size
+        if width <= 0 or height <= 0 or width * height > Config.MAX_OBJECT_IMAGE_PIXELS:
+            raise HTTPException(status_code=400, detail={"code": "INVALID_IMAGE", "message": "Invalid image dimensions"})
+        image = cv2.imdecode(np.frombuffer(contents, dtype=np.uint8), cv2.IMREAD_COLOR)
+    except (cv2.error, OSError, ValueError, Image.DecompressionBombError) as exc:
+        raise HTTPException(status_code=400, detail={"code": "INVALID_IMAGE", "message": "Invalid image encoding"}) from exc
+    if image is None:
+        raise HTTPException(status_code=400, detail={"code": "INVALID_IMAGE", "message": "Invalid image dimensions or encoding"})
+    try:
+        with INFERENCE_SLOTS:
+            return _object_response(image, _process_objects(image))
+    except Exception as exc:
+        logger.exception("Uploaded-object inference failed")
+        raise _inference_error(exc) from exc
 
 
 def set_resource_pool(pool: ResourcePool):

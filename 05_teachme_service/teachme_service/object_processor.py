@@ -55,7 +55,11 @@ class ObjectProcessor:
         Integrates computer vision output with object attributes
         """
         # Get vision-based attributes
-        vision_attributes = self._get_vision_attributes(object_data.name)
+        vision_attributes = (
+            self._attributes_from_observation(object_data.vision_observation)
+            if object_data.vision_observation is not None
+            else self._get_vision_attributes(object_data.name)
+        )
         
         # Extract and enhance object features
         enhanced_attributes = self._enhance_object_features(object_data, vision_attributes)
@@ -77,7 +81,11 @@ class ObjectProcessor:
         Processes object with async HTTP calls for better performance
         """
         # Get vision-based attributes asynchronously
-        vision_attributes = await self._get_vision_attributes_async(object_data.name)
+        vision_attributes = (
+            self._attributes_from_observation(object_data.vision_observation)
+            if object_data.vision_observation is not None
+            else await self._get_vision_attributes_async(object_data.name)
+        )
         
         # Extract and enhance object features
         enhanced_attributes = self._enhance_object_features(object_data, vision_attributes)
@@ -92,6 +100,21 @@ class ObjectProcessor:
             description=object_data.description or self._generate_description(object_data.name, enhanced_attributes),
             visual_embedding=vision_attributes.get('visual_embedding') if vision_attributes.get('vision_detected') else None,
         )
+
+    def _attributes_from_observation(self, observation) -> Dict[str, Any]:
+        """Keep box, detector metadata and vector from the same selected frame."""
+        bbox = observation.bounding_box
+        return {
+            'color': 'varies',
+            'shape': self._determine_shape(bbox),
+            'detected_class': observation.class_name,
+            'class_id': observation.class_id,
+            'confidence': observation.confidence,
+            'bounding_box': bbox,
+            'vision_detected': True,
+            'visual_embedding': observation.embedding,
+            'visual_embedding_model': observation.embedding_model,
+        }
     
     def _get_vision_attributes(self, object_name: str) -> Dict[str, Any]:
         """
@@ -375,7 +398,11 @@ class ObjectProcessor:
             for key, value in vision_attributes.items():
                 if key == 'visual_embedding':
                     continue
-                if key not in enhanced or key in ['color', 'shape', 'size_cm']:
+                if key not in enhanced or key in [
+                    'color', 'shape', 'size_cm', 'detected_class', 'class_id',
+                    'confidence', 'bounding_box', 'vision_detected',
+                    'visual_embedding_model',
+                ]:
                     enhanced[key] = value
         else:
             # Use fallback data but mark it clearly

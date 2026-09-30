@@ -31,6 +31,8 @@ class Config:
     
     CAMERA_TIMEOUT = int(os.getenv("CAMERA_TIMEOUT", "10"))
     INFERENCE_MAX_CONCURRENCY = max(1, int(os.getenv("VISION_INFERENCE_MAX_CONCURRENCY", "1")))
+    MAX_OBJECT_UPLOAD_BYTES = max(1, int(os.getenv("VISION_MAX_OBJECT_UPLOAD_BYTES", "10000000")))
+    MAX_OBJECT_IMAGE_PIXELS = max(1, int(os.getenv("VISION_MAX_OBJECT_IMAGE_PIXELS", "16000000")))
     CAMERA_DEVICE = os.getenv("VISION_CAMERA_DEVICE", "").strip() or None
     # Loopback IP avoids Windows' localhost IPv6 fallback delay while remaining
     # fully overrideable for container/remote deployments.
