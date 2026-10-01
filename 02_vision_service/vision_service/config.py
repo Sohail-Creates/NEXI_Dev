@@ -33,6 +33,9 @@ class Config:
     INFERENCE_MAX_CONCURRENCY = max(1, int(os.getenv("VISION_INFERENCE_MAX_CONCURRENCY", "1")))
     MAX_OBJECT_UPLOAD_BYTES = max(1, int(os.getenv("VISION_MAX_OBJECT_UPLOAD_BYTES", "10000000")))
     MAX_OBJECT_IMAGE_PIXELS = max(1, int(os.getenv("VISION_MAX_OBJECT_IMAGE_PIXELS", "16000000")))
+    INSTANCE_MODEL_PATH = Path(os.getenv(
+        "VISION_INSTANCE_MODEL_PATH", _SERVICE_ROOT / "models" / "resnet18-f37072fd.pth"
+    )).resolve()
     CAMERA_DEVICE = os.getenv("VISION_CAMERA_DEVICE", "").strip() or None
     # Loopback IP avoids Windows' localhost IPv6 fallback delay while remaining
     # fully overrideable for container/remote deployments.

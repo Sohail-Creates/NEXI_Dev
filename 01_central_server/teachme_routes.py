@@ -38,6 +38,7 @@ class ObjectData(BaseModel):
     # Additive passthrough: the selected Vision detection is validated by
     # TeachMe and prevents a second, nondeterministic camera observation.
     vision_observation: Optional[Dict[str, Any]] = None
+    vision_observations: Optional[List[Dict[str, Any]]] = None
 
 
 class FactData(BaseModel):

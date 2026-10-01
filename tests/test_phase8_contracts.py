@@ -115,6 +115,51 @@ async def test_selected_vision_observation_skips_second_capture() -> None:
         ObjectData(name="bad", vision_observation={**observation, "embedding": [0.0] * 64})
 
 
+@pytest.mark.asyncio
+async def test_multiple_instance_views_persist_without_changing_legacy_vectors(tmp_path) -> None:
+    from pydantic import ValidationError
+
+    processor = ObjectProcessor()
+    first = {
+        "bounding_box": {"x": 0, "y": 0, "width": 128, "height": 128},
+        "embedding": [0.125] * 64,
+        "embedding_model": "yolov8n-p3-roi-avg-v1",
+        "embedding_dimension": 64,
+        "instance_embedding": [1.0] + [0.0] * 511,
+        "instance_embedding_model": "torchvision-resnet18-imagenet1k-v1",
+        "instance_embedding_dimension": 512,
+        "instance_embedding_version": 1,
+    }
+    second = {key: value for key, value in first.items() if not key.startswith("embedding")}
+    second["instance_embedding"] = [0.0, 1.0] + [0.0] * 510
+    processed = await processor.process_object_async(ObjectData(
+        name="taught item", vision_observations=[first, second]
+    ))
+    assert processed.visual_embedding == first["embedding"]
+    assert len(processed.instance_prototypes) == 2
+    assert "instance_embedding" not in processed.attributes
+    now = datetime.utcnow()
+    item = KnowledgeItem(
+        id="multi-view", type=LearningType.OBJECT, data=processed,
+        tags=[], confidence=1.0, created_at=now, updated_at=now,
+        embedding=[0.5] * 384, visual_embedding=processed.visual_embedding,
+        instance_prototypes=processed.instance_prototypes,
+        instance_embedding_model=processed.instance_embedding_model,
+        instance_embedding_version=processed.instance_embedding_version,
+    )
+    database = tmp_path / "knowledge.sqlite3"
+    initialize(database)
+    store = KnowledgeStore(database)
+    store.save({}, {item.id: item.model_dump(mode="json")}, {})
+    restored = KnowledgeItem.model_validate(store.read()["storage"][item.id])
+    assert len(restored.embedding) == 384
+    assert len(restored.visual_embedding) == 64
+    assert len(restored.instance_prototypes) == 2
+    assert all(len(vector) == 512 for vector in restored.instance_prototypes)
+    with pytest.raises(ValidationError):
+        ObjectData(name="bad", vision_observations=[{**first, "instance_embedding": [0.0] * 512}])
+
+
 def test_object_upload_distinguishes_bad_image_from_model_failure(monkeypatch) -> None:
     import io
     import cv2

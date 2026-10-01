@@ -55,11 +55,13 @@ class ObjectProcessor:
         Integrates computer vision output with object attributes
         """
         # Get vision-based attributes
+        observations = object_data.vision_observations or ([object_data.vision_observation] if object_data.vision_observation else [])
         vision_attributes = (
-            self._attributes_from_observation(object_data.vision_observation)
-            if object_data.vision_observation is not None
+            self._attributes_from_observation(observations[0])
+            if observations
             else self._get_vision_attributes(object_data.name)
         )
+        prototypes, model, version = self._instance_prototypes(observations, vision_attributes)
         
         # Extract and enhance object features
         enhanced_attributes = self._enhance_object_features(object_data, vision_attributes)
@@ -73,6 +75,9 @@ class ObjectProcessor:
             category=object_data.category or detected_category,
             description=object_data.description or self._generate_description(object_data.name, enhanced_attributes),
             visual_embedding=vision_attributes.get('visual_embedding') if vision_attributes.get('vision_detected') else None,
+            instance_prototypes=prototypes,
+            instance_embedding_model=model,
+            instance_embedding_version=version,
         )
     
     async def process_object_async(self, object_data: ObjectData) -> ObjectData:
@@ -81,11 +86,13 @@ class ObjectProcessor:
         Processes object with async HTTP calls for better performance
         """
         # Get vision-based attributes asynchronously
+        observations = object_data.vision_observations or ([object_data.vision_observation] if object_data.vision_observation else [])
         vision_attributes = (
-            self._attributes_from_observation(object_data.vision_observation)
-            if object_data.vision_observation is not None
+            self._attributes_from_observation(observations[0])
+            if observations
             else await self._get_vision_attributes_async(object_data.name)
         )
+        prototypes, model, version = self._instance_prototypes(observations, vision_attributes)
         
         # Extract and enhance object features
         enhanced_attributes = self._enhance_object_features(object_data, vision_attributes)
@@ -99,7 +106,27 @@ class ObjectProcessor:
             category=object_data.category or detected_category,
             description=object_data.description or self._generate_description(object_data.name, enhanced_attributes),
             visual_embedding=vision_attributes.get('visual_embedding') if vision_attributes.get('vision_detected') else None,
+            instance_prototypes=prototypes,
+            instance_embedding_model=model,
+            instance_embedding_version=version,
         )
+
+    @staticmethod
+    def _instance_prototypes(observations, vision_attributes):
+        """Keep only distinct, same-model vectors from the selected observations."""
+        candidates = [(o.instance_embedding, o.instance_embedding_model, o.instance_embedding_version) for o in observations if o.instance_embedding is not None]
+        if not candidates and vision_attributes.get('instance_embedding') is not None:
+            candidates = [(vision_attributes['instance_embedding'], vision_attributes['instance_embedding_model'], vision_attributes['instance_embedding_version'])]
+        if not candidates:
+            return None, None, None
+        model, version = candidates[0][1:]
+        if any((candidate_model, candidate_version) != (model, version) for _, candidate_model, candidate_version in candidates):
+            raise ValueError('Cannot mix instance embedding models or versions')
+        unique = []
+        for vector, _, _ in candidates:
+            if vector not in unique:
+                unique.append(vector)
+        return unique, model, version
 
     def _attributes_from_observation(self, observation) -> Dict[str, Any]:
         """Keep box, detector metadata and vector from the same selected frame."""
@@ -107,13 +134,16 @@ class ObjectProcessor:
         return {
             'color': 'varies',
             'shape': self._determine_shape(bbox),
-            'detected_class': observation.class_name,
+            'detected_class': observation.class_name or 'unknown',
             'class_id': observation.class_id,
-            'confidence': observation.confidence,
+            'confidence': observation.confidence or 0.0,
             'bounding_box': bbox,
             'vision_detected': True,
             'visual_embedding': observation.embedding,
             'visual_embedding_model': observation.embedding_model,
+            'instance_embedding': observation.instance_embedding,
+            'instance_embedding_model': observation.instance_embedding_model,
+            'instance_embedding_version': observation.instance_embedding_version,
         }
     
     def _get_vision_attributes(self, object_name: str) -> Dict[str, Any]:
@@ -186,6 +216,9 @@ class ObjectProcessor:
                     visual_embedding = matched_object.get('embedding')
                     if visual_embedding is not None:
                         result_data['visual_embedding'] = visual_embedding
+                    for field in ('instance_embedding', 'instance_embedding_model', 'instance_embedding_version'):
+                        if matched_object.get(field) is not None:
+                            result_data[field] = matched_object[field]
                     # A visual vector belongs to this camera observation, not a name cache.
                     logger.info(f" MATCHED: '{object_name}' found (conf: {result_data['confidence']:.2f})")
                     return result_data
@@ -242,6 +275,9 @@ class ObjectProcessor:
                     visual_embedding = matched_object.get('embedding')
                     if visual_embedding is not None:
                         result_data['visual_embedding'] = visual_embedding
+                    for field in ('instance_embedding', 'instance_embedding_model', 'instance_embedding_version'):
+                        if matched_object.get(field) is not None:
+                            result_data[field] = matched_object[field]
                     # A visual vector belongs to this camera observation, not a name cache.
                     logger.info(f"[Async]  MATCHED: '{object_name}' found (conf: {result_data['confidence']:.2f})")
                     return result_data
@@ -396,7 +432,7 @@ class ObjectProcessor:
         if vision_attributes.get('vision_detected', False):
             # Overwrite with vision data
             for key, value in vision_attributes.items():
-                if key == 'visual_embedding':
+                if key in ('visual_embedding', 'instance_embedding', 'instance_embedding_model', 'instance_embedding_version'):
                     continue
                 if key not in enhanced or key in [
                     'color', 'shape', 'size_cm', 'detected_class', 'class_id',

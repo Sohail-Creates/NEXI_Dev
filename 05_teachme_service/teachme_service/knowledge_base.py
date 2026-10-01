@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 import contextlib
 import threading
+import math
 from .sqlite_store import KnowledgeStore, locked
 
 # Safe file locking (cross-platform)
@@ -20,7 +21,7 @@ except ImportError:
     aiofiles = None
 
 from .models import KnowledgeItem, LearningType, ObjectData, FactData
-from .config import storage_config, performance_config, search_index_config
+from .config import storage_config, performance_config, search_index_config, visual_recognition_config
 from .embedding_index import EmbeddingIndex
 from .services.embedding_client import EmbeddingClient
 from .services.dedup_checker import DedupChecker
@@ -177,6 +178,9 @@ class PersistentKnowledgeBase:
             updated_at=now,
             embedding=embedding,  # Semantic text embedding for the existing index
             visual_embedding=object_data.visual_embedding,
+            instance_prototypes=object_data.instance_prototypes,
+            instance_embedding_model=object_data.instance_embedding_model,
+            instance_embedding_version=object_data.instance_embedding_version,
         )
         
         self._storage[item_id] = knowledge_item  # Single source of truth
@@ -289,6 +293,40 @@ class PersistentKnowledgeBase:
     @locked
     def get_all_objects(self) -> List[KnowledgeItem]:
         return list(self.objects.values())
+
+    @locked
+    def recognize_visual(self, embedding: List[float], model: str, version: Optional[int] = None) -> Dict[str, Any]:
+        """Compare only compatible visual spaces; max score across each object's views."""
+        query_norm = math.sqrt(math.fsum(value * value for value in embedding))
+        if not query_norm or not all(math.isfinite(value) for value in embedding):
+            raise ValueError("Invalid visual query embedding")
+        instance_space = model == "torchvision-resnet18-imagenet1k-v1" and version == 1
+        threshold = visual_recognition_config.INSTANCE_MATCH_THRESHOLD if instance_space else visual_recognition_config.P3_MATCH_THRESHOLD
+        min_margin = visual_recognition_config.INSTANCE_MIN_MARGIN if instance_space else visual_recognition_config.P3_MIN_MARGIN
+        scored = []
+        for item in self.objects.values():
+            if instance_space:
+                if (item.instance_embedding_model, item.instance_embedding_version) != (model, version):
+                    continue
+                prototypes = item.instance_prototypes or []
+            else:
+                prototypes = [item.visual_embedding] if item.visual_embedding is not None else []
+            scores = []
+            for prototype in prototypes:
+                if len(prototype) != len(embedding):
+                    continue
+                norm = math.sqrt(math.fsum(value * value for value in prototype))
+                if norm:
+                    scores.append(math.fsum(a*b for a, b in zip(embedding, prototype)) / (query_norm * norm))
+            if scores:
+                scored.append({"id": item.id, "label": item.data.name, "similarity": max(scores)})
+        scored.sort(key=lambda candidate: candidate["similarity"], reverse=True)
+        if not scored or scored[0]["similarity"] < threshold:
+            return {"decision": "unknown", "match": None, "similarity": scored[0]["similarity"] if scored else None, "margin": None}
+        margin = scored[0]["similarity"] - scored[1]["similarity"] if len(scored) > 1 else None
+        if margin is not None and margin < min_margin:
+            return {"decision": "ambiguous", "match": None, "similarity": scored[0]["similarity"], "margin": margin, "candidates": scored[:2]}
+        return {"decision": "matched", "match": scored[0], "similarity": scored[0]["similarity"], "margin": margin}
     
     @locked
     def get_all_facts(self) -> List[KnowledgeItem]:

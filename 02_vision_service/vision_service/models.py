@@ -30,6 +30,10 @@ class DetectedObject(BaseModel):
     embedding: List[float]
     embedding_model: str
     embedding_dimension: int
+    instance_embedding: Optional[List[float]] = None
+    instance_embedding_model: Optional[str] = None
+    instance_embedding_dimension: Optional[int] = None
+    instance_embedding_version: Optional[int] = None
 
 class ObjectDetectionResponse(BaseModel):
     status: str
@@ -38,6 +42,15 @@ class ObjectDetectionResponse(BaseModel):
     frame_height: int
     objects_detected: int
     detections: List[DetectedObject]
+
+
+class ObjectSignatureResponse(BaseModel):
+    status: str
+    bounding_box: BoundingBox
+    instance_embedding: List[float]
+    instance_embedding_model: str
+    instance_embedding_dimension: int
+    instance_embedding_version: int
 
 class CompleteAnalysisResponse(BaseModel):
     status: str
@@ -67,6 +80,7 @@ class HealthCheckResponse(BaseModel):
     camera: str
     face_model: str
     object_model: str
+    instance_model: str
     opencv_version: str
     emotion_detection: str
     timestamp: str

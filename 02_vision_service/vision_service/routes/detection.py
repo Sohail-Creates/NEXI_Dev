@@ -13,11 +13,14 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, File, UploadFile, Query, Response
 from PIL import Image
 
-from ..models import FaceDetectionResponse, CompleteAnalysisResponse, FaceData, BoundingBox, ObjectDetectionResponse, DetectedObject
+from ..models import FaceDetectionResponse, CompleteAnalysisResponse, FaceData, BoundingBox, ObjectDetectionResponse, ObjectSignatureResponse, DetectedObject
 from ..config import Config
 from ..services.resource_pool import ResourcePool
 from ..services.inference import INFERENCE_SLOTS
 from ..services.object_detector import ObjectEmbeddingError
+from ..services.object_instance_embedder import (
+    InstanceEmbeddingError, INSTANCE_MODEL_ID, INSTANCE_MODEL_VERSION, INSTANCE_DIMENSION,
+)
 from ..services.face_detector import (
     detect_faces_deepface,
     process_face,
@@ -33,6 +36,7 @@ router = APIRouter()
 
 # Global resource pool reference (set by app.py)
 _resource_pool = None
+_instance_encoder = None
 
 
 class ObjectInferenceError(RuntimeError):
@@ -67,6 +71,18 @@ def _process_objects(frame):
     results = detector.detect(frame)
     if results is None:
         raise ObjectInferenceError("Object detection inference failed")
+    if _instance_encoder is None:
+        return results  # Preserve the existing P3 detection contract while readiness degrades.
+    for detection in results.get("detections", []):
+        box = detection["bounding_box"]
+        x, y = box["x"], box["y"]
+        vector = _instance_encoder.encode(frame, (x, y, x + box["width"], y + box["height"]))
+        detection.update(
+            instance_embedding=vector,
+            instance_embedding_model=INSTANCE_MODEL_ID,
+            instance_embedding_dimension=len(vector),
+            instance_embedding_version=INSTANCE_MODEL_VERSION,
+        )
     return results
 
 
@@ -99,6 +115,8 @@ def _inference_error(exc: Exception):
             status_code=500,
             detail={"code": "OBJECT_EMBEDDING_FAILED", "message": str(exc)},
         )
+    if isinstance(exc, InstanceEmbeddingError):
+        return HTTPException(status_code=500, detail={"code": "INSTANCE_EMBEDDING_FAILED", "message": str(exc)})
     return HTTPException(
         status_code=500,
         detail={"code": "FACE_INFERENCE_FAILED", "message": "Face inference failed"},
@@ -136,6 +154,17 @@ def detect_objects_from_upload(file: UploadFile = File(...)):
     """Object-only detection on an uploaded photo; same model and vector path as camera."""
     if _resource_pool is None:
         raise HTTPException(status_code=503, detail="Resource pool not initialized")
+    image = _decode_object_upload(file)
+    try:
+        with INFERENCE_SLOTS:
+            return _object_response(image, _process_objects(image))
+    except Exception as exc:
+        logger.exception("Uploaded-object inference failed")
+        raise _inference_error(exc) from exc
+
+
+def _decode_object_upload(file: UploadFile):
+    """Bound and decode an untrusted object image before inference."""
     contents = file.file.read(Config.MAX_OBJECT_UPLOAD_BYTES + 1)
     if len(contents) > Config.MAX_OBJECT_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail={"code": "INVALID_IMAGE", "message": "Image upload is too large"})
@@ -149,18 +178,46 @@ def detect_objects_from_upload(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail={"code": "INVALID_IMAGE", "message": "Invalid image encoding"}) from exc
     if image is None:
         raise HTTPException(status_code=400, detail={"code": "INVALID_IMAGE", "message": "Invalid image dimensions or encoding"})
+    return image
+
+
+@router.post("/detect/objects/signature/upload", response_model=ObjectSignatureResponse)
+def signature_from_upload(
+    file: UploadFile = File(...),
+    x: int = Query(..., ge=0), y: int = Query(..., ge=0),
+    width: int = Query(..., gt=0), height: int = Query(..., gt=0),
+):
+    """Embed an explicitly selected ROI; no YOLO class is required."""
+    if _resource_pool is None:
+        raise HTTPException(status_code=503, detail="Resource pool not initialized")
+    image = _decode_object_upload(file)
+    image_height, image_width = image.shape[:2]
+    if width < 16 or height < 16 or x + width > image_width or y + height > image_height:
+        raise HTTPException(status_code=400, detail={"code": "INVALID_BBOX", "message": "Box is too small or exceeds image bounds"})
+    if _instance_encoder is None:
+        raise HTTPException(status_code=503, detail={"code": "MODEL_NOT_READY", "message": "Object feature model unavailable"})
     try:
         with INFERENCE_SLOTS:
-            return _object_response(image, _process_objects(image))
+            vector = _instance_encoder.encode(image, (x, y, x + width, y + height))
     except Exception as exc:
-        logger.exception("Uploaded-object inference failed")
+        logger.exception("Selected-object embedding failed")
         raise _inference_error(exc) from exc
+    return ObjectSignatureResponse(
+        status="success", bounding_box=BoundingBox(x=x, y=y, width=width, height=height),
+        instance_embedding=vector, instance_embedding_model=INSTANCE_MODEL_ID,
+        instance_embedding_dimension=len(vector), instance_embedding_version=INSTANCE_MODEL_VERSION,
+    )
 
 
 def set_resource_pool(pool: ResourcePool):
     """Set the global resource pool reference"""
     global _resource_pool
     _resource_pool = pool
+
+
+def set_instance_encoder(encoder):
+    global _instance_encoder
+    _instance_encoder = encoder
 
 
 @router.get("/frame", responses={200: {"content": {"image/jpeg": {}}}})

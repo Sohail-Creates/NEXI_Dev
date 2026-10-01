@@ -26,6 +26,9 @@ logs/
 *.log
 data/
 models/
+!02_vision_service/models/
+02_vision_service/models/*
+!02_vision_service/models/resnet18-f37072fd.pth
 *.faiss
 *.onnx
 *.json

@@ -51,12 +51,13 @@ async def health_check_detailed(request: Request):
     
     face_model_loaded = getattr(request.app.state, "face_model_loaded", False)
     object_model_loaded = getattr(request.app.state, "object_model_loaded", False)
+    instance_model_loaded = getattr(request.app.state, "instance_model_loaded", False)
     object_status = (
         "disabled" if not Config.ENABLE_OBJECT_DETECTION
         else "loaded" if object_model_loaded
         else "unavailable"
     )
-    models_ready = face_model_loaded and object_status in {"loaded", "disabled"}
+    models_ready = face_model_loaded and object_status in {"loaded", "disabled"} and (not Config.ENABLE_OBJECT_DETECTION or instance_model_loaded)
     emotion_status = "disabled"
     
     return HealthCheckResponse(
@@ -64,6 +65,7 @@ async def health_check_detailed(request: Request):
         camera="not_checked",
         face_model="loaded" if face_model_loaded else "unavailable",
         object_model=object_status,
+        instance_model="loaded" if instance_model_loaded else "unavailable",
         opencv_version=cv2.__version__,
         emotion_detection=emotion_status,
         timestamp=datetime.utcnow().isoformat()

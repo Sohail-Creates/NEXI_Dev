@@ -101,44 +101,10 @@ class ObjectDetector:
             return None
         
         try:
-            import torch
-
             started = time.perf_counter()
             embedding_seconds = 0.0
-
-            # Capture the P3 feature map from the same forward pass as detection.
-            # The pinned YOLOv8n Detect head consumes layers [15, 18, 21]; its
-            # first input is the stride-8 feature map used for object-level ROIs.
-            with self._inference_lock:
-                capture: dict[str, object] = {}
-                detection_model = self.model.model
-                layers = detection_model.model
-                detect_head = layers[-1]
-                p3_layer_index = detect_head.f[0]
-                p3_layer = layers[p3_layer_index]
-
-                def capture_input(_module, args):
-                    capture["input_hw"] = tuple(args[0].shape[-2:])
-
-                def capture_p3(_module, _args, output):
-                    capture["p3"] = output
-
-                input_hook = layers[0].register_forward_pre_hook(capture_input)
-                p3_hook = p3_layer.register_forward_hook(capture_p3)
-                try:
-                    results = self.model(image, verbose=False)
-                finally:
-                    input_hook.remove()
-                    p3_hook.remove()
-                detection_seconds = time.perf_counter() - started
-
-                feature_map = capture.get("p3")
-                input_hw = capture.get("input_hw")
-                if feature_map is None or input_hw is None:
-                    raise ObjectEmbeddingError("YOLO object feature map was not produced")
-                if not isinstance(feature_map, torch.Tensor):
-                    raise ObjectEmbeddingError("YOLO object feature map has an invalid type")
-                stride = float(detect_head.stride[0].item())
+            results, feature_map, input_hw, stride = self._forward_with_features(image)
+            detection_seconds = time.perf_counter() - started
             
             if not results or len(results) == 0:
                 logger.debug("No detections found")
@@ -226,6 +192,54 @@ class ObjectDetector:
         except Exception as e:
             logger.error(f"Error in object detection: {e}")
             return None
+
+    def embed_bbox(self, image: np.ndarray, bbox: tuple[int, int, int, int]) -> list[float]:
+        """Represent a caller-selected ROI without requiring a YOLO detection.
+
+        P3 still requires one YOLO forward pass; only box selection bypasses YOLO.
+        """
+        if not self.available or self.model is None:
+            raise ObjectEmbeddingError("YOLO feature model is unavailable")
+        started = time.perf_counter()
+        _, feature_map, input_hw, stride = self._forward_with_features(image)
+        detection_ms = (time.perf_counter() - started) * 1000
+        vector = self._roi_embedding(
+            image=image, feature_map=feature_map, input_hw=input_hw,
+            stride=stride, bbox=bbox,
+        )
+        logger.info("Selected ROI feature_ms=%.1f total_ms=%.1f", detection_ms,
+                    (time.perf_counter() - started) * 1000)
+        return vector
+
+    def _forward_with_features(self, image: np.ndarray):
+        """One shared YOLO/P3 forward path for detection and selected ROIs."""
+        import torch
+
+        with self._inference_lock:
+            capture: dict[str, object] = {}
+            layers = self.model.model.model
+            detect_head = layers[-1]
+            p3_layer = layers[detect_head.f[0]]
+
+            def capture_input(_module, args):
+                capture["input_hw"] = tuple(args[0].shape[-2:])
+
+            def capture_p3(_module, _args, output):
+                capture["p3"] = output
+
+            input_hook = layers[0].register_forward_pre_hook(capture_input)
+            p3_hook = p3_layer.register_forward_hook(capture_p3)
+            try:
+                results = self.model(image, verbose=False)
+            finally:
+                input_hook.remove()
+                p3_hook.remove()
+
+            feature_map = capture.get("p3")
+            input_hw = capture.get("input_hw")
+            if not isinstance(feature_map, torch.Tensor) or input_hw is None:
+                raise ObjectEmbeddingError("YOLO object feature map was not produced")
+            return results, feature_map, input_hw, float(detect_head.stride[0].item())
 
     @staticmethod
     def _roi_embedding(

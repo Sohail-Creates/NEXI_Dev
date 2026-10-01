@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 from .config import Config
 from .services.resource_pool import ResourcePool
 from .services.face_detector import load_model_with_retry
+from .services.object_instance_embedder import ObjectInstanceEmbedder
 
 # Import route handlers
 from .routes import health, detection, streaming, camera
@@ -52,6 +53,7 @@ async def lifespan(app: FastAPI):
     global _resource_pool
     app.state.face_model_loaded = False
     app.state.object_model_loaded = False
+    app.state.instance_model_loaded = False
     
     # Startup
     logger.info("=" * 60)
@@ -107,9 +109,17 @@ async def lifespan(app: FastAPI):
                 logger.info(f" Object detection is available ({Config.OBJECT_DETECTION_MODEL})")
             else:
                 logger.warning(" Object detection is not available")
+            encoder = ObjectInstanceEmbedder(Config.INSTANCE_MODEL_PATH)
+            try:
+                encoder.load()
+                detection.set_instance_encoder(encoder)
+                app.state.instance_model_loaded = True
+                logger.info("Object instance encoder loaded")
+            except Exception:
+                logger.exception("Object instance encoder unavailable")
         
         logger.info("=" * 60)
-        logger.info(" Vision Service Ready for Requests")
+        logger.info(" Vision Service initialized; readiness is reported by /health")
         logger.info(f" Running on {Config.HOST}:{Config.PORT}")
         logger.info(f" Documentation: http://localhost:{Config.PORT}/docs")
         logger.info("=" * 60)

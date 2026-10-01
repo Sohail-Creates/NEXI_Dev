@@ -11,7 +11,7 @@ from shared.security import allowed_origins
 from shared.api_errors import error_response, install_error_handlers
 from shared.request_middleware import install_request_observability
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from .models import LearningRequest, LearningType
+from .models import LearningRequest, LearningType, VisualRecognitionRequest
 from .knowledge_base import knowledge_base
 from .object_processor import object_processor
 from typing import List, Optional, Dict, Any
@@ -517,6 +517,13 @@ async def learn_item(request: LearningRequest, _auth=Depends(require_api_key),
         )
 
 # ========== Knowledge Viewing Endpoints ==========
+
+@app.post("/knowledge/objects/recognize")
+def recognize_visual_object(request: VisualRecognitionRequest, _auth=Depends(require_api_key)):
+    """Resolve an exact taught object, or abstain, from a Vision vector."""
+    return knowledge_base.recognize_visual(
+        request.embedding, request.embedding_model, request.embedding_version
+    )
 
 @app.get("/knowledge/objects")
 async def get_objects(_auth=Depends(require_api_key)):

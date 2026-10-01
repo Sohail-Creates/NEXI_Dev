@@ -69,6 +69,15 @@ class SearchIndexConfig:
     FALLBACK_TO_LINEAR: bool = True
 
 
+class VisualRecognitionConfig:
+    """Conservative, benchmark-calibrated identity admission by vector space."""
+    INSTANCE_MATCH_THRESHOLD: float = float(os.getenv("INSTANCE_MATCH_THRESHOLD", "0.80"))
+    INSTANCE_MIN_MARGIN: float = float(os.getenv("INSTANCE_MIN_MARGIN", "0.10"))
+    # P3 did not separate COIL instances; prefer abstention over false identity.
+    P3_MATCH_THRESHOLD: float = float(os.getenv("P3_MATCH_THRESHOLD", "0.9999"))
+    P3_MIN_MARGIN: float = float(os.getenv("P3_MIN_MARGIN", "0.005"))
+
+
 class ServerConfig:
     """FastAPI server settings"""
     
@@ -97,6 +106,7 @@ storage_config = StorageConfig()
 search_index_config = SearchIndexConfig()
 server_config = ServerConfig()
 performance_config = PerformanceConfig()
+visual_recognition_config = VisualRecognitionConfig()
 
 
 def validate_config() -> bool:
