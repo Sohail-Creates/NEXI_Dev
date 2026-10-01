@@ -188,17 +188,20 @@ class VerifySpeakerRequest(BaseModel):
 
 
 class VerifySpeakerResponse(BaseModel):
-    """Response model for speaker verification."""
+    """Backward-compatible response for 1:N speaker identification with rejection."""
     
     status: str = Field(description="Status of the verification operation")
     user_id: str = Field(description="Identified user ID or 'unknown' if not recognized")
-    confidence: float = Field(description="Confidence score of the match")
+    confidence: float = Field(description="Legacy alias for cosine similarity; not a probability")
     is_verified: bool = Field(description="Whether speaker was successfully verified")
     threshold: float = Field(description="Verification threshold used")
     timestamp: str = Field(description="ISO format timestamp of verification")
     access_token: Optional[str] = Field(default=None, description="Signed user session token")
     token_type: Optional[str] = None
     expires_in: Optional[int] = None
+    decision: Optional[str] = Field(default=None, description="matched, unknown, or ambiguous")
+    similarity: Optional[float] = Field(default=None, description="Cosine similarity; not a probability")
+    margin: Optional[float] = Field(default=None, description="Top-1 minus top-2 cosine similarity")
 
 
 # Week 2: Speech-to-Text Models

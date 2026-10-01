@@ -18,6 +18,7 @@ import os
 from shared.clients.audio_client import AudioServiceClient
 from shared.jwt_manager import require_user_ownership
 from shared.security import require_internal_service
+from shared.speaker_embeddings import SpeakerEmbeddingError, normalize_voice_embeddings
 
 # Configure logger
 logger = logging.getLogger(__name__)
@@ -40,6 +41,31 @@ def _get_enrollment_lock(username: str) -> threading.RLock:
 # Create router
 router = APIRouter(prefix="/users", tags=["User Management"])
 _audio_verification_client = AudioServiceClient()
+
+
+def _canonicalize_voice_fields(record: Dict[str, Any]) -> list[list[float]]:
+    """Validate legacy input, then retain only the canonical plural list shape."""
+    try:
+        vectors = normalize_voice_embeddings(record)
+    except SpeakerEmbeddingError as exc:
+        raise HTTPException(status_code=400, detail={"code": exc.reason, "message": str(exc)}) from exc
+    record["voice_embeddings"] = vectors
+    record.pop("voice_embedding", None)
+    return vectors
+
+
+async def _refresh_audio_speaker_index() -> bool:
+    """Best-effort refresh; Central persistence remains authoritative on outage."""
+    try:
+        result = await _audio_verification_client.sync_speakers_from_central()
+        logger.info(
+            "Audio speaker index refreshed: loaded=%s skipped=%s",
+            result.get("users_loaded"), result.get("users_skipped"),
+        )
+        return True
+    except Exception as exc:
+        logger.warning("Audio speaker index refresh failed after Central update: %s", exc)
+        return False
 
 
 def _get_app_state(request: Request):
@@ -109,6 +135,8 @@ async def add_user(user_data: Dict[str, Any], request: Request):
 
         user_id = user_data.get("user_id") or f"user_{uuid.uuid4().hex[:12]}"
         user_data["user_id"] = user_id
+        if "voice_embeddings" in user_data or "voice_embedding" in user_data:
+            _canonicalize_voice_fields(user_data)
         
         # Check if user exists
         existing = _find_user_record(app_state, name)
@@ -145,7 +173,7 @@ async def list_users(request: Request):
         
         users_list = []
         for idx, user in enumerate(app_state.db.get("users", [])):
-            voice_embs = user.get("voice_embeddings", [])
+            voice_embs = user.get("voice_embeddings") or user.get("voice_embedding") or []
             face_embs = user.get("face_embeddings", [])
             logger.info(f"[LIST-USERS] DEBUG: User {idx} ({user.get('user_id')}): voice_embeddings={len(voice_embs)}, face_embeddings={len(face_embs)}")
             
@@ -159,6 +187,8 @@ async def list_users(request: Request):
                 },
                 # Include embeddings for service sync
                 "voice_embeddings": voice_embs,
+                # Retain the legacy field for Audio sync normalization of old records.
+                "voice_embedding": user.get("voice_embedding"),
                 "face_embeddings": face_embs
             })
         
@@ -283,6 +313,10 @@ async def delete_user(user_id: str, request: Request):
             raise HTTPException(status_code=500, detail="Failed to delete user conversation and sync data")
 
         removed_sessions = delete_rag_sessions_for_user(user_id)
+        # A direct Central deletion must not leave a stale biometric candidate.
+        # The Enrollment Service also verifies this refresh in its orchestrated
+        # deletion flow; this makes the Central endpoint safe on its own.
+        speaker_index_synced = await _refresh_audio_speaker_index()
         logger.info(
             "User data purged from Central: user_id=%s conversations=deleted rag_sessions=%d",
             user_id,
@@ -295,6 +329,7 @@ async def delete_user(user_id: str, request: Request):
             "user_id": user_id,
             "user_name": deleted_name,
             "deleted_stores": ["central_profile", "conversations_and_sync_outbox", "rag_session_context"],
+            "audio_speaker_index_synced": speaker_index_synced,
         }
     
     except HTTPException:
@@ -490,7 +525,11 @@ async def register_user_with_voice(
                 "has_face": False,
                 "enrollment_timestamp": datetime.utcnow().isoformat(),
                 "audio_samples": audio_file_paths,
-                "voice_embedding": enrollment_data.get("voice_embedding", enrollment_data.get("embedding_array")),
+                "voice_embeddings": _canonicalize_voice_fields({
+                    "voice_embeddings": enrollment_data.get("voice_embeddings")
+                    or enrollment_data.get("embedding_array")
+                    or enrollment_data.get("voice_embedding")
+                }),
                 "speaker_enrollment": {
                     "status": "success",
                     "speaker_id": enrollment_data.get("speaker_id", user_id),
@@ -504,6 +543,7 @@ async def register_user_with_voice(
             
             # Persist user data
             await _persist_users(app_state, request)
+            speaker_index_synced = await _refresh_audio_speaker_index()
             
             logger.info(f"User {user_id} ({name}) enrolled successfully with {enrollment_data.get('num_samples', 3)} voice samples")
             
@@ -517,6 +557,7 @@ async def register_user_with_voice(
                     "enrollment_num_samples": enrollment_data.get("num_samples", 3),
                     "embedding_size": enrollment_data.get("embedding_size", 0),
                     "speaker_id": enrollment_data.get("speaker_id", user_id),
+                    "speaker_index_synced": speaker_index_synced,
                     "enrolled_at": user_record["enrollment_timestamp"]
                 },
                 "message": f"User '{name}' enrolled successfully with {enrollment_data.get('num_samples', 3)} voice samples"
@@ -583,10 +624,15 @@ async def update_user_embeddings(user_id: str, payload: Dict[str, Any], request:
                 "replace_mode": False,
             }
 
-        if not isinstance(new_voice_embeddings, list) or not isinstance(new_face_embeddings, list):
+        if not isinstance(new_face_embeddings, list):
             raise HTTPException(status_code=400, detail="voice_embeddings and face_embeddings must be lists")
 
-        user["voice_embeddings"] = new_voice_embeddings
+        if new_voice_embeddings is not None:
+            new_voice_embeddings = _canonicalize_voice_fields({"voice_embeddings": new_voice_embeddings})
+            user["voice_embeddings"] = new_voice_embeddings
+            user.pop("voice_embedding", None)
+        else:
+            new_voice_embeddings = _canonicalize_voice_fields(user)
         user["face_embeddings"] = new_face_embeddings
         user["face_confidences"] = payload.get("face_confidences", [0.0] * len(new_face_embeddings))
         user["voice_qualities"] = payload.get("voice_qualities", [0.0] * len(new_voice_embeddings))
@@ -596,6 +642,10 @@ async def update_user_embeddings(user_id: str, payload: Dict[str, Any], request:
 
         app_state.db["users"][user_index] = user
         await _persist_users(app_state, request)
+        speaker_index_synced = (
+            await _refresh_audio_speaker_index()
+            if payload.get("voice_embeddings") is not None else None
+        )
         
         logger.info(
             f"User {user_id} embeddings replaced: "
@@ -606,6 +656,7 @@ async def update_user_embeddings(user_id: str, payload: Dict[str, Any], request:
             "status": "updated",
             "message": f"Embeddings updated for user {user_id}",
             "replace_mode": True,
+            "speaker_index_synced": speaker_index_synced,
             "new_counts": {
                 "voice_embeddings": len(new_voice_embeddings),
                 "face_embeddings": len(new_face_embeddings),
@@ -662,13 +713,15 @@ async def append_user_embeddings(user_id: str, request: Request):
         
         # IMPORTANT: Append to existing embeddings (do NOT replace)
         # This ensures all historical data is preserved for improved training
-        existing_voice_embeddings = user.get("voice_embeddings", [])
+        existing_voice_embeddings = _canonicalize_voice_fields(user)
         existing_face_embeddings = user.get("face_embeddings", [])
         existing_face_confidences = user.get("face_confidences", [])
         existing_voice_qualities = user.get("voice_qualities", [])
         
         # Accumulate embeddings
-        user["voice_embeddings"] = existing_voice_embeddings + new_voice_embeddings
+        incoming_voice = _canonicalize_voice_fields({"voice_embeddings": new_voice_embeddings})
+        user["voice_embeddings"] = existing_voice_embeddings + incoming_voice
+        user.pop("voice_embedding", None)
         user["face_embeddings"] = existing_face_embeddings + new_face_embeddings
         user["face_confidences"] = existing_face_confidences + new_face_confidences
         user["voice_qualities"] = existing_voice_qualities + new_voice_qualities
@@ -680,12 +733,14 @@ async def append_user_embeddings(user_id: str, request: Request):
         
         app_state.db["users"][user_index] = user
         await _persist_users(app_state, request)
+        speaker_index_synced = await _refresh_audio_speaker_index()
         
         logger.info(f"User {user_id} embeddings appended: +{len(new_voice_embeddings)} voice, +{len(new_face_embeddings)} face = {len(user['voice_embeddings'])} total voice, {len(user['face_embeddings'])} total face")
         
         return {
             "status": "appended",
             "message": f"Embeddings appended for user {user_id}",
+            "speaker_index_synced": speaker_index_synced,
             "new_counts": {
                 "voice_embeddings": len(user["voice_embeddings"]),
                 "face_embeddings": len(user["face_embeddings"])
@@ -718,6 +773,7 @@ async def add_user_embeddings(request: Request):
         relation = body.get("relation")
         voice_embeddings = body.get("voice_embeddings", [])
         face_embeddings = body.get("face_embeddings", [])
+        voice_embeddings = _canonicalize_voice_fields({"voice_embeddings": voice_embeddings})
         
         logger.info(f"[ADD-EMBEDDINGS] REQUEST RECEIVED:")
         logger.info(f"  user_name: {user_name}")
@@ -774,6 +830,7 @@ async def add_user_embeddings(request: Request):
             
             # CRITICAL FIX: Persist to disk!
             await _persist_users(app_state, request, immediate=True)
+            speaker_index_synced = await _refresh_audio_speaker_index() if voice_embeddings else None
             logger.info(f"[ADD-EMBEDDINGS]  User {user_id} persisted to disk")
         
         return {
@@ -782,6 +839,7 @@ async def add_user_embeddings(request: Request):
                 "user_id": user_id,
                 "name": user_name,
                 "embeddings_stored": True,
+                "speaker_index_synced": speaker_index_synced if app_state else None,
                 "voice_embeddings_count": len(voice_embeddings),
                 "face_embeddings_count": len(face_embeddings)
             },
@@ -898,7 +956,11 @@ async def enroll_user_complete(
         
         # Extract embeddings from result
         embeddings_data = enrollment_result.data
-        voice_embeddings = embeddings_data.get("embedding_array") or [embeddings_data.get("voice_embedding")]
+        voice_embeddings = _canonicalize_voice_fields({
+            "voice_embeddings": embeddings_data.get("voice_embeddings")
+            or embeddings_data.get("embedding_array")
+            or embeddings_data.get("voice_embedding")
+        })
         embedding_size = embeddings_data.get("embedding_size", 256)
         
         logger.info(f"[/users/enroll-complete] Successfully enrolled speaker - embeddings: {len(voice_embeddings)}, size: {embedding_size}")
@@ -924,6 +986,8 @@ async def enroll_user_complete(
         }
         
         app_state.db["users"].append(user_record)
+        await _persist_users(app_state, request)
+        speaker_index_synced = await _refresh_audio_speaker_index()
         logger.info(f"[/users/enroll-complete] User {user_id} stored in Central Server database")
         
         return {
@@ -936,6 +1000,7 @@ async def enroll_user_complete(
                 "enrolled_with": len(audio_data),
                 "embeddings_count": len(voice_embeddings),
                 "embedding_size": embedding_size,
+                "speaker_index_synced": speaker_index_synced,
                 "enrollment_timestamp": user_record["enrollment_timestamp"]
             },
             "message": f"User '{user_name}' enrolled successfully with {len(audio_data)} voice samples"

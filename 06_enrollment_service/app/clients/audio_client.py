@@ -34,24 +34,7 @@ class AudioClient:
 
     async def sync_speakers_from_central(self) -> dict:
         """Ask Audio to atomically refresh its verification store from Central."""
-        import httpx
-        from config.ssl_config import client_verify
-        from shared.security import internal_service_headers
-
-        base_url = self.client.base_url.rstrip("/")
-        async with httpx.AsyncClient(
-            timeout=self.client.timeout,
-            verify=client_verify(base_url),
-        ) as client:
-            response = await client.post(
-                f"{base_url}/api/v1/speaker-sync",
-                headers=internal_service_headers(),
-            )
-            response.raise_for_status()
-            result = response.json()
-        if result.get("success") is not True:
-            raise RuntimeError(result.get("message") or "Audio speaker sync failed")
-        return result
+        return await self.client.sync_speakers_from_central()
     
     async def enroll_speaker(self, speaker_id: str, audio_bytes: bytes) -> dict:
         """

@@ -248,6 +248,18 @@ async def lifespan(app: FastAPI):
         logger.error(f"Failed to initialize orchestrator: {e}", exc_info=True)
         logger.warning("Service will continue without orchestrator (client-driven only)")
     
+    # Rebuild the in-memory identification index after every restart. A Central
+    # outage is non-fatal and leaves the encrypted last-known index intact.
+    try:
+        from audio_service.routes.advanced_routes import sync_speakers_from_central
+        sync_result = await sync_speakers_from_central()
+        if sync_result.get("success"):
+            logger.info("Startup speaker sync loaded %s candidates", sync_result.get("users_loaded", 0))
+        else:
+            logger.warning("Startup speaker sync unavailable; retaining persisted candidate index")
+    except Exception as exc:
+        logger.warning("Startup speaker sync failed; retaining persisted candidate index: %s", exc)
+
     logger.info("Audio Service startup complete")
     
     yield

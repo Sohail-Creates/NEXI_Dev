@@ -9,6 +9,7 @@ from pathlib import Path
 import sys
 import tempfile
 import time
+import threading
 from types import SimpleNamespace
 
 import numpy as np
@@ -248,10 +249,14 @@ def test_g_pickle_migration_twice_and_existing_verification_flow(monkeypatch, tm
 
     service = module.SpeakerService.__new__(module.SpeakerService)
     service.encoder = SimpleNamespace(embed_utterance=lambda _audio: vector.copy())
+    service._encoder_lock = threading.Lock()
+    service._index_lock = threading.RLock()
+    cache = {}
+    service._preprocess_cache = SimpleNamespace(get=cache.get, set=lambda key, value: cache.__setitem__(key, value))
     service.speaker_embeddings = {"user-a": vector.copy()}
     monkeypatch.setattr(module, "load_audio_file", lambda _path: (np.ones(32000, dtype=np.float32), 16000))
     monkeypatch.setattr(module, "validate_audio_duration", lambda *_args, **_kwargs: True)
-    fake_resemblyzer = SimpleNamespace(preprocess_wav=lambda data, _rate: data)
+    fake_resemblyzer = SimpleNamespace(preprocess_wav=lambda data, source_sr: data)
     monkeypatch.setitem(sys.modules, "resemblyzer", fake_resemblyzer)
     user_id, confidence = service.verify_speaker("synthesized.wav")
     print(f"G_MIGRATION_FIRST {first}")

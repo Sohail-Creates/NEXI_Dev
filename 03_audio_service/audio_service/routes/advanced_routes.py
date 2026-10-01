@@ -7,10 +7,12 @@ import logging
 import os
 import asyncio
 import queue
+import threading
 from datetime import datetime
 import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File, Query
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 from shared.security import require_internal_service
 
 from audio_service.models import (
@@ -59,13 +61,18 @@ stt_service = STTService()
 
 # Speaker service - LAZY initialization (only when needed)
 _speaker_service_instance: object = None
+_speaker_service_thread_lock = threading.Lock()
 
 def get_speaker_service():
     """Get or create speaker service lazily on first use"""
     global _speaker_service_instance
     if _speaker_service_instance is None:
-        logger.info("Initializing SpeakerService on first use")
-        _speaker_service_instance = SpeakerService()
+        # Constructor is lightweight; guard concurrent first requests from
+        # creating multiple model/index owners.
+        with _speaker_service_thread_lock:
+            if _speaker_service_instance is None:
+                logger.info("Initializing SpeakerService on first use")
+                _speaker_service_instance = SpeakerService()
     return _speaker_service_instance
 
 
@@ -392,9 +399,10 @@ async def enroll_speaker(request: EnrollSpeakerRequest):
         logger.info(f"Enrolling speaker: {request.user_id}")
         
         # Perform speaker enrollment - now returns (audio_file, embedding_size, embedding_array)
-        audio_file, embedding_size, embedding_array = get_speaker_service().enroll_speaker(
+        audio_file, embedding_size, embedding_array = await run_in_threadpool(
+            get_speaker_service().enroll_speaker,
             user_id=request.user_id,
-            duration=request.duration
+            duration=request.duration,
         )
         
         response = EnrollSpeakerResponse(
@@ -474,7 +482,7 @@ async def enroll_speaker_with_files(request: dict):
         logger.info(f"Enrolling speaker with files: {user_id}, {len(audio_files)} files")
         
         # Use speaker service to create embedding from files
-        result = get_speaker_service().enroll_speaker_from_files(user_id, audio_files)
+        result = await run_in_threadpool(get_speaker_service().enroll_speaker_from_files, user_id, audio_files)
         
         return EnrollSpeakerResponse(
             status="success",
@@ -544,6 +552,54 @@ async def list_enrolled_speakers():
     }
 )
 async def sync_speakers_from_central():
+    """Build and persist a complete candidate map before publishing it."""
+    try:
+        import requests
+        from config.ports import ServicePorts
+        from config.ssl_config import client_verify
+        from shared.security import internal_service_headers
+
+        central_url = ServicePorts.get_base_url("central")
+        response = requests.get(
+            f"{central_url}/users/list", headers=internal_service_headers(), timeout=10,
+            verify=client_verify(central_url),
+        )
+        if response.status_code != 200:
+            logger.error("Speaker sync Central fetch failed: status=%d", response.status_code)
+            return {"success": False, "message": "Failed to fetch users from Central Server", "speakers_synced": 0}
+        payload = response.json()
+        users = payload.get("users", []) if isinstance(payload, dict) else payload
+        if not isinstance(users, list):
+            return {"success": False, "message": "Invalid users response from Central Server", "speakers_synced": 0}
+
+        service = get_speaker_service()
+        new_index, counts = service.build_candidate_index(users)
+        service.replace_speaker_index(new_index)
+        skipped = counts["skipped_users"]
+        for item in skipped:
+            logger.warning("Speaker candidate skipped: user_id=%s reason=%s", item["user_id"], item["reason"])
+        logger.info(
+            "Speaker sync complete: users_seen=%d users_with_voice_data=%d users_loaded=%d users_skipped=%d",
+            counts["users_seen"], counts["users_with_voice_data"], counts["users_loaded"], counts["users_skipped"],
+        )
+        return {
+            "success": True,
+            "message": f"Synced {counts['users_loaded']} speakers from Central Server",
+            "speakers_synced": counts["users_loaded"],
+            "speakers_skipped": counts["users_skipped"],
+            "validation_issues": skipped or None,
+            "users_seen": counts["users_seen"],
+            "users_with_voice_data": counts["users_with_voice_data"],
+            "users_loaded": counts["users_loaded"],
+            "users_skipped": counts["users_skipped"],
+            "timestamp": datetime.now().isoformat(),
+        }
+    except Exception as exc:
+        logger.error("Speaker sync failed; existing candidate index retained: %s", exc)
+        return {"success": False, "message": "Speaker synchronization failed", "speakers_synced": 0}
+
+
+async def _legacy_sync_speakers_from_central():
     """
     Sync speaker embeddings from Central Server to Audio Service.
     
@@ -559,6 +615,7 @@ async def sync_speakers_from_central():
     Returns:
         Dictionary with sync status, count of speakers synced, and validation results
     """
+    return await sync_speakers_from_central()
     try:
         import requests
         import numpy as np
@@ -748,7 +805,8 @@ async def debug_speakers():
         logger.info(" DEBUG: Checking speaker embeddings state...")
         
         # Get current speakers in memory
-        speakers_in_memory = list(speaker_service.speaker_embeddings.keys())
+        speaker_index = speaker_service.get_speaker_embeddings_snapshot()
+        speakers_in_memory = list(speaker_index.keys())
         speaker_count = len(speakers_in_memory)
         
         # Validate each speaker embedding
@@ -760,7 +818,7 @@ async def debug_speakers():
         }
         
         for user_id in speakers_in_memory:
-            embedding = speaker_service.speaker_embeddings.get(user_id)
+            embedding = speaker_index.get(user_id)
             
             if embedding is None:
                 validation_report["invalid_speakers"].append(f"{user_id}: None value")
@@ -861,7 +919,7 @@ async def debug_speakers():
 )
 async def verify_speaker(file: UploadFile = File(...)):
     """
-    Verify speaker identity from uploaded audio file.
+    Identify a speaker among enrolled users from uploaded audio (1:N with rejection).
     
     This compares the voice in the audio file against all enrolled speakers
     to determine who is speaking.
@@ -870,7 +928,7 @@ async def verify_speaker(file: UploadFile = File(...)):
         file: Audio file (WAV, MP3) to verify speaker identity
         
     Returns:
-        VerifySpeakerResponse: Verification result with user ID and confidence
+        VerifySpeakerResponse: Identification decision, similarity, and optional user ID
         
     Raises:
         HTTPException: If verification fails
@@ -905,12 +963,13 @@ async def verify_speaker(file: UploadFile = File(...)):
         
         logger.info(f"Verifying speaker from uploaded audio: {file.filename}")
         
-        # Perform speaker verification on the temporary file
-        user_id, confidence = get_speaker_service().verify_speaker(temp_file_path)
-        
-        # Determine if speaker was successfully verified
-        threshold = get_speaker_service().get_verification_threshold()
-        is_verified = confidence >= threshold and user_id != "unknown"
+        # This is 1:N identification with rejection (not classical 1:1 verification).
+        result = await run_in_threadpool(get_speaker_service().identify_speaker, temp_file_path)
+        decision = result["decision"]
+        user_id = result["user_id"] or "unknown"  # Preserve legacy response contract.
+        confidence = float(result["similarity"])
+        threshold = float(result["threshold"])
+        is_verified = decision == "matched"
         token_result = None
         if is_verified:
             from shared.jwt_manager import get_jwt_manager
@@ -926,6 +985,9 @@ async def verify_speaker(file: UploadFile = File(...)):
             access_token=token_result["token"] if token_result else None,
             token_type=token_result["type"] if token_result else None,
             expires_in=token_result["expires_in"] if token_result else None,
+            decision=decision,
+            similarity=round(confidence, 4),
+            margin=round(result["margin"], 4) if result["margin"] is not None else None,
         )
         
         logger.info(
@@ -984,6 +1046,21 @@ async def verify_speaker(file: UploadFile = File(...)):
         500: {"model": ErrorResponse, "description": "Processing failed"}
     }
 )
+def _extract_voice_embedding_sync(audio_path: str) -> tuple[list[float], float]:
+    from audio_service.utils.audio_preprocessing import load_audio_file, validate_audio_duration
+    waveform, sample_rate = load_audio_file(audio_path)
+    if not validate_audio_duration(waveform, sample_rate, min_duration=0.5):
+        raise ValueError("Audio is too short. Please provide at least 0.5 seconds of speech.")
+    mono = np.mean(waveform, axis=1) if waveform.ndim > 1 else waveform
+    rms = float(np.sqrt(np.mean(np.square(mono, dtype=np.float64)))) if mono.size else 0.0
+    if not np.isfinite(rms) or rms < 1e-5:
+        raise ValueError("Audio is effectively silent")
+    embedding, processed_rms = get_speaker_service().generate_embedding(
+        waveform, sample_rate, cache_path=audio_path, return_preprocessed_rms=True
+    )
+    return embedding.astype(float).tolist(), processed_rms
+
+
 async def process_voice_file(file: UploadFile = File(...)):
     """
     Extract voice embedding from uploaded audio file.
@@ -1031,6 +1108,28 @@ async def process_voice_file(file: UploadFile = File(...)):
             )
         
         logger.info(f"Processing voice from uploaded file: {file.filename}")
+
+        try:
+            embedding_list, audio_rms = await run_in_threadpool(_extract_voice_embedding_sync, temp_file_path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except SpeakerServiceError as exc:
+            logger.error("Speaker embedding generation failed: %s", exc)
+            raise HTTPException(status_code=500, detail="Failed to extract voice embedding") from exc
+
+        quality_score = min(1.0, max(0.0, audio_rms / 0.2))
+        return {
+            "success": True,
+            "data": {
+                "embedding": embedding_list,
+                "embedding_size": len(embedding_list),
+                "quality_score": round(float(quality_score), 3),
+                "voice_detected": True,
+                "audio_file": file.filename,
+                "timestamp": datetime.now().isoformat(),
+            },
+            "error": None,
+        }
         
         # Initialize speaker service encoder
         try:
@@ -1329,11 +1428,13 @@ async def process_command(request: ProcessCommandRequest):
         # Step 1: Speaker verification (if enabled)
         if request.verify_speaker:
             try:
-                user_id, speaker_confidence = get_speaker_service().verify_speaker(
-                    request.audio_file
+                identification = await run_in_threadpool(
+                    get_speaker_service().identify_speaker, request.audio_file
                 )
+                user_id = identification["user_id"] or "unknown"
+                speaker_confidence = float(identification["similarity"])
                 threshold = get_speaker_service().get_verification_threshold()
-                is_verified = speaker_confidence >= threshold and user_id != "unknown"
+                is_verified = identification["decision"] == "matched"
                 
                 logger.info(
                     f"Speaker verification: user_id={user_id}, "

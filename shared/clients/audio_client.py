@@ -14,6 +14,7 @@ from typing import Optional
 from ..utils.circuit_breaker import CircuitBreaker, CircuitBreakerException
 from .models import ServiceCallResult
 from ..config import ServiceConfig
+from shared.speaker_embeddings import validate_speaker_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -146,26 +147,21 @@ class AudioServiceClient:
                                         logger.info(f"[AudioClient] Data keys: {list(data.keys())}")
                                         embedding = data.get("embedding")
                                         
-                                        if embedding:
-                                            if isinstance(embedding, (list, tuple)):
-                                                logger.info(f"[AudioClient]  Got embedding: type={type(embedding).__name__}, size={len(embedding)}")
-                                                embeddings.append(embedding)
-                                                logger.info(f"[AudioClient]  Processed enrollment sample {idx+1}/{len(audio_samples)} - embedding size: {len(embedding)}")
-                                            else:
-                                                logger.error(f"[AudioClient]  Embedding is wrong type: {type(embedding).__name__} (expected list/tuple)")
-                                        else:
-                                            logger.error(f"[AudioClient]  Embedding is None/empty in data: {data}")
+                                        if not embedding:
+                                            raise ValueError("Audio service returned no speaker embedding")
+                                        vector = validate_speaker_embedding(embedding)
+                                        embeddings.append(vector)
+                                        logger.info(f"[AudioClient] Processed sample {idx+1}/{len(audio_samples)} (256D)")
                                     else:
-                                        logger.error(f"[AudioClient]  Data is not a dict, it's {type(data).__name__}: {data}")
+                                        logger.error(f"[AudioClient] Data has invalid type: {type(data).__name__}")
                                 else:
                                     logger.error(f"[AudioClient]  success=False")
                                     logger.error(f"[AudioClient] Error field: {result.get('error', 'NO ERROR FIELD')}")
                             else:
-                                logger.error(f"[AudioClient]  Response is not a dict, it's {type(result).__name__}: {str(result)[:200]}")
+                                logger.error(f"[AudioClient] Response has invalid type: {type(result).__name__}")
                         else:
                             logger.error(f"[AudioClient]  HTTP {response.status_code}")
-                            error_text = response.text[:500] if response.text else "NO ERROR TEXT"
-                            logger.error(f"[AudioClient] Error response: {error_text}")
+                            raise ValueError(f"Audio service returned HTTP {response.status_code}")
                     
                     except Exception as sample_err:
                         logger.error(f"[AudioClient]  EXCEPTION processing sample {idx+1}: {str(sample_err)}")
@@ -174,6 +170,12 @@ class AudioServiceClient:
                         logger.error(f"[AudioClient] Traceback: {traceback.format_exc()}")
                         raise
             
+            if len(embeddings) != len(audio_samples):
+                return ServiceCallResult(
+                    success=False,
+                    error_code="INCOMPLETE_EMBEDDINGS",
+                    error_message="Audio service did not return a valid embedding for every sample",
+                )
             if not embeddings:
                 logger.error(f"[AudioClient] No valid embeddings extracted from {len(audio_samples)} samples")
                 return ServiceCallResult(
@@ -198,6 +200,7 @@ class AudioServiceClient:
                     "embedding_size": embedding_size,
                     "embedding_array": avg_embedding,
                     "voice_embedding": avg_embedding,
+                    "voice_embeddings": embeddings,
                     "num_samples": len(embeddings),
                     "status": "success",
                     "message": f"Speaker enrolled successfully with {len(embeddings)} samples"
@@ -228,6 +231,22 @@ class AudioServiceClient:
                 error_code="AUDIO_SERVICE_ERROR",
                 error_message=f"Unexpected error: {str(e)}"
             )
+
+    async def sync_speakers_from_central(self) -> dict:
+        """Refresh Audio's candidate index after a Central enrollment/deletion."""
+        async with httpx.AsyncClient(
+            timeout=self.timeout,
+            verify=client_verify(self.base_url),
+        ) as client:
+            response = await client.post(
+                f"{self.base_url.rstrip('/')}/api/v1/speaker-sync",
+                headers=internal_service_headers(),
+            )
+            response.raise_for_status()
+            result = response.json()
+        if not isinstance(result, dict) or result.get("success") is not True:
+            raise RuntimeError("Audio speaker synchronization failed")
+        return result
 
     async def process_voice(
         self,

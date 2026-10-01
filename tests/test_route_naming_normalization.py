@@ -76,7 +76,8 @@ def test_c_user_creation_alias_is_identical_and_callers_migrated(monkeypatch) ->
     monkeypatch.setattr(
         user_routes.uuid, "uuid4", lambda: SimpleNamespace(hex="c" * 32)
     )
-    payload = {"name": "Canonical User", "voice_embeddings": [[0.1]], "face_embeddings": [[0.2]]}
+    valid_voice_sample = [1.0] + [0.0] * 255
+    payload = {"name": "Canonical User", "voice_embeddings": [valid_voice_sample], "face_embeddings": [[0.2]]}
     headers = {"X-NEXI-Service-Token": SERVICE_TOKEN}
     with TestClient(_user_app()) as primary_client:
         primary = primary_client.post("/users", headers=headers, json=dict(payload))
@@ -152,7 +153,7 @@ def test_e_registration_with_embeddings_alias_is_identical(monkeypatch) -> None:
     )
     payload = {
         "user_name": "Embedding User",
-        "voice_embeddings": [[0.1]],
+        "voice_embeddings": [[1.0] + [0.0] * 255],
         "face_embeddings": [[0.2]],
     }
     with TestClient(_user_app()) as primary_client:

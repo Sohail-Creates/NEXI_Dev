@@ -7,12 +7,12 @@ import logging
 import pickle
 import json
 import os
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Tuple, Optional, List
 
 import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
 
 from audio_service.config import (
     SPEAKER_CONFIG,
@@ -29,13 +29,17 @@ from audio_service.utils.audio_preprocessing import (
 from audio_service.utils.audio_utils import record_and_save_audio
 from audio_service.utils.cache import get_default_cache
 from shared.secure_storage import ENCRYPTED_PREFIX, RotatingFernet
+from shared.speaker_embeddings import (
+    SPEAKER_EMBEDDING_DIMENSION,
+    SpeakerEmbeddingError,
+    cosine_similarities,
+    normalize_voice_embeddings,
+    validate_speaker_embedding,
+)
 
 logger = logging.getLogger(__name__)
 
 SPEAKER_STORE_SCHEMA_VERSION = 1
-SPEAKER_EMBEDDING_DIMENSION = 256
-
-
 class _RestrictedNumpyUnpickler(pickle.Unpickler):
     """Legacy-only loader restricted to the globals used by NumPy arrays."""
 
@@ -61,9 +65,10 @@ def _validated_embeddings(records) -> Dict[str, np.ndarray]:
     for user_id, values in records.items():
         if not isinstance(user_id, str) or not user_id or not isinstance(values, (list, np.ndarray)):
             raise SpeakerServiceError("Invalid speaker store record")
-        vector = np.asarray(values, dtype=np.float32)
-        if vector.shape != (SPEAKER_EMBEDDING_DIMENSION,) or not np.isfinite(vector).all():
-            raise SpeakerServiceError(f"Invalid embedding for {user_id}")
+        try:
+            vector = np.asarray(validate_speaker_embedding(values), dtype=np.float32)
+        except SpeakerEmbeddingError as exc:
+            raise SpeakerServiceError(f"Invalid embedding for {user_id}: {exc.reason}") from exc
         validated[user_id] = vector
     return validated
 
@@ -130,6 +135,8 @@ class SpeakerService:
             self.embeddings_file = self.embeddings_file.with_suffix(".json")
         self.legacy_embeddings_file = self.embeddings_file.with_suffix(".pkl")
         self.speaker_embeddings: Dict[str, np.ndarray] = {}
+        self._index_lock = threading.RLock()
+        self._encoder_lock = threading.Lock()
 
         # Load existing embeddings if available
         self._load_embeddings()
@@ -158,18 +165,18 @@ class SpeakerService:
             SpeakerServiceError: If encoder initialization fails
         """
         try:
-            if self.encoder is None:
-                logger.info("Loading Resemblyzer voice encoder...")
-                # Lazy import to avoid import-time dependency issues
-                try:
-                    from resemblyzer import VoiceEncoder
-                except Exception as e:
-                    error_msg = f"Failed to import Resemblyzer: {e}. Install Microsoft Visual C++ Build Tools and run: pip install resemblyzer==0.1.1.dev0"
-                    logger.error(error_msg)
-                    raise SpeakerServiceError(error_msg) from e
+            with self._encoder_lock:
+                if self.encoder is None:
+                    logger.info("Loading Resemblyzer voice encoder...")
+                    try:
+                        from resemblyzer import VoiceEncoder
+                    except Exception as e:
+                        error_msg = f"Failed to import Resemblyzer: {e}. Install Microsoft Visual C++ Build Tools and run: pip install resemblyzer==0.1.1.dev0"
+                        logger.error(error_msg)
+                        raise SpeakerServiceError(error_msg) from e
 
-                self.encoder = VoiceEncoder()
-                logger.info("Voice encoder loaded successfully")
+                    self.encoder = VoiceEncoder()
+                    logger.info("Voice encoder loaded successfully")
         except Exception as e:
             error_msg = f"Failed to initialize voice encoder: {str(e)}"
             logger.error(error_msg)
@@ -212,7 +219,9 @@ class SpeakerService:
             SpeakerServiceError: If save operation fails
         """
         try:
-            _write_json_store(self.embeddings_file, _validated_embeddings(self.speaker_embeddings))
+            with self._index_lock:
+                snapshot = dict(self.speaker_embeddings)
+            _write_json_store(self.embeddings_file, _validated_embeddings(snapshot))
 
             logger.info(f"Saved {len(self.speaker_embeddings)} speaker embeddings")
 
@@ -220,6 +229,167 @@ class SpeakerService:
             error_msg = f"Failed to save embeddings: {str(e)}"
             logger.error(error_msg)
             raise SpeakerServiceError(error_msg) from e
+
+    def get_speaker_embeddings_snapshot(self) -> Dict[str, np.ndarray]:
+        """Return a stable shallow copy of the user-to-vector index."""
+        with self._index_lock:
+            return dict(self.speaker_embeddings)
+
+    def replace_speaker_index(self, records: Dict[str, np.ndarray]) -> None:
+        """Persist and atomically publish a complete candidate index."""
+        validated = _validated_embeddings(records)
+        try:
+            with self._index_lock:
+                _write_json_store(self.embeddings_file, validated)
+                self.speaker_embeddings = validated
+        except Exception as e:
+            raise SpeakerServiceError(f"Failed to replace speaker index: {e}") from e
+
+    def upsert_speaker_embedding(self, user_id: str, embedding) -> None:
+        vector = np.asarray(validate_speaker_embedding(embedding), dtype=np.float32)
+        with self._index_lock:
+            updated = dict(self.speaker_embeddings)
+            updated[user_id] = vector
+            self.replace_speaker_index(updated)
+
+    def generate_embedding(
+        self,
+        audio_data: np.ndarray,
+        sample_rate: int,
+        *,
+        cache_path: str | None = None,
+        return_preprocessed_rms: bool = False,
+    ) -> np.ndarray | tuple[np.ndarray, float]:
+        """Create one validated Resemblyzer embedding through the shared audio path."""
+        self.initialize_encoder()
+        waveform = np.asarray(audio_data)
+        if waveform.ndim > 1:
+            waveform = np.mean(waveform, axis=1)
+        waveform = waveform.astype(np.float32, copy=False)
+        if waveform.size == 0 or sample_rate <= 0 or not np.isfinite(waveform).all():
+            raise SpeakerServiceError("Audio waveform or sample rate is invalid")
+
+        try:
+            from resemblyzer import preprocess_wav
+            cached = self._preprocess_cache.get(cache_path) if cache_path else None
+            if cached is not None:
+                preprocessed = cached[0]
+            else:
+                preprocessed = preprocess_wav(waveform, source_sr=sample_rate)
+                if cache_path:
+                    self._preprocess_cache.set(cache_path, (preprocessed, 16000))
+            if preprocessed is None or len(preprocessed) == 0:
+                raise SpeakerServiceError("Preprocessed waveform is empty")
+            embedding = self.encoder.embed_utterance(preprocessed)  # type: ignore
+            vector = np.asarray(validate_speaker_embedding(embedding), dtype=np.float32)
+            if return_preprocessed_rms:
+                rms = float(np.sqrt(np.mean(np.square(preprocessed, dtype=np.float64))))
+                return vector, rms
+            return vector
+        except SpeakerEmbeddingError as exc:
+            raise SpeakerServiceError(f"Generated embedding rejected: {exc.reason}") from exc
+        except SpeakerServiceError:
+            raise
+        except Exception as exc:
+            raise SpeakerServiceError(f"Failed to preprocess or embed audio: {exc}") from exc
+
+    def build_candidate_index(self, users) -> tuple[Dict[str, np.ndarray], Dict[str, object]]:
+        """Normalize, validate, and centroid Central users without mutating live state."""
+        if not isinstance(users, list):
+            raise SpeakerServiceError("Central users response must be a list")
+
+        counters: Dict[str, object] = {
+            "users_seen": len(users),
+            "users_with_voice_data": 0,
+            "users_loaded": 0,
+            "users_skipped": 0,
+            "skipped_users": [],
+        }
+        candidates: Dict[str, np.ndarray] = {}
+        skipped_users: list[dict[str, str]] = counters["skipped_users"]  # type: ignore[assignment]
+
+        for user in users:
+            user_id = user.get("user_id") or user.get("id") if isinstance(user, dict) else None
+            has_voice_data = isinstance(user, dict) and (
+                "voice_embeddings" in user or "voice_embedding" in user
+            )
+            if has_voice_data:
+                counters["users_with_voice_data"] = int(counters["users_with_voice_data"]) + 1
+            if not user_id:
+                reason = "missing_user_id"
+            elif not has_voice_data:
+                continue
+            elif user_id in candidates:
+                reason = "duplicate_user_id"
+            else:
+                try:
+                    samples = normalize_voice_embeddings(user)
+                    if not samples:
+                        raise SpeakerEmbeddingError("empty_voice_embeddings", "No voice vectors")
+                    centroid = np.mean(np.asarray(samples, dtype=np.float64), axis=0)
+                    norm = float(np.linalg.norm(centroid))
+                    if not np.isfinite(centroid).all() or not np.isfinite(norm) or norm == 0.0:
+                        raise SpeakerEmbeddingError("zero_norm_embedding", "Centroid is not finite and non-zero")
+                    candidate = (centroid / norm).astype(np.float32)
+                    candidates[user_id] = np.asarray(validate_speaker_embedding(candidate), dtype=np.float32)
+                    counters["users_loaded"] = int(counters["users_loaded"]) + 1
+                    continue
+                except SpeakerEmbeddingError as exc:
+                    reason = exc.reason
+
+            counters["users_skipped"] = int(counters["users_skipped"]) + 1
+            skipped_users.append({"user_id": str(user_id or ""), "reason": reason})
+
+        return candidates, counters
+
+    def identify_embedding(self, embedding) -> Dict[str, object]:
+        """Score every candidate and make an order-independent decision."""
+        try:
+            query = validate_speaker_embedding(embedding)
+        except SpeakerEmbeddingError as exc:
+            raise SpeakerServiceError(f"Invalid query embedding: {exc.reason}") from exc
+
+        candidates = self.get_speaker_embeddings_snapshot()
+        user_ids = list(candidates)
+        scores = cosine_similarities(
+            query,
+            [candidates[user_id] for user_id in user_ids],
+            candidates_are_validated=True,
+        )
+        scored = list(zip(scores, user_ids))
+        scored.sort(key=lambda entry: (-entry[0], entry[1]))
+        threshold = float(SPEAKER_CONFIG["verification_threshold"])
+        margin_limit = float(SPEAKER_CONFIG.get("min_margin", 0.0))
+        best_score = scored[0][0] if scored else 0.0
+        margin = scored[0][0] - scored[1][0] if len(scored) > 1 else None
+
+        if not scored or best_score < threshold:
+            decision, user_id = "unknown", None
+        elif margin is not None and margin <= margin_limit:
+            decision, user_id = "ambiguous", None
+        else:
+            decision, user_id = "matched", scored[0][1]
+
+        return {
+            "decision": decision,
+            "user_id": user_id,
+            "similarity": float(best_score),
+            "margin": float(margin) if margin is not None else None,
+            "threshold": threshold,
+            "min_margin": margin_limit,
+        }
+
+    def identify_speaker(self, audio_path: str) -> Dict[str, object]:
+        """Identify a speaker among all enrolled candidates, rejecting unsafe matches."""
+        audio_data, sample_rate = load_audio_file(audio_path)
+        if not validate_audio_duration(
+            audio_data, sample_rate, min_duration=SPEAKER_CONFIG["min_speech_duration"]
+        ):
+            raise SpeakerServiceError(
+                f"Audio is too short (minimum {SPEAKER_CONFIG['min_speech_duration']}s)"
+            )
+        embedding = self.generate_embedding(audio_data, sample_rate, cache_path=audio_path)
+        return self.identify_embedding(embedding)
     
     def validate_embeddings_consistency(self) -> Dict[str, any]:
         """
@@ -325,35 +495,8 @@ class SpeakerService:
                     f"Recorded audio is too short for enrollment (minimum {SPEAKER_CONFIG['min_speech_duration']}s)"
                 )
             
-            # Preprocess audio for Resemblyzer (lazy import)
-            try:
-                from resemblyzer import preprocess_wav
-            except Exception as e:
-                error_msg = f"Failed to import Resemblyzer preprocess_wav: {e}"
-                logger.error(error_msg)
-                raise SpeakerServiceError(error_msg) from e
-
-            # Use cache keyed by filepath mtime to avoid reprocessing
-            cached = self._preprocess_cache.get(audio_file_path)
-            if cached is not None:
-                preprocessed_audio, _ = cached
-            else:
-                # Resemblyzer expects audio at 16kHz
-                preprocessed_audio = preprocess_wav(audio_data, sample_rate)
-                try:
-                    # cache processed waveform (we store sample rate as 16000 for consistency)
-                    self._preprocess_cache.set(audio_file_path, (preprocessed_audio, 16000))
-                except Exception:
-                    pass
-            
-            # Generate voice embedding
-            embedding = self.encoder.embed_utterance(preprocessed_audio)  # type: ignore
-            
-            # Store embedding with user ID
-            self.speaker_embeddings[user_id] = embedding
-            
-            # Save to disk
-            self._save_embeddings()
+            embedding = self.generate_embedding(audio_data, sample_rate, cache_path=audio_file_path)
+            self.upsert_speaker_embedding(user_id, embedding)
             
             logger.info(
                 f"Successfully enrolled speaker: {user_id} "
@@ -412,27 +555,7 @@ class SpeakerService:
                     logger.warning(f"Skipping short audio file: {audio_file}")
                     continue
                 
-                # Preprocess for Resemblyzer (16kHz) - lazy import
-                try:
-                    from resemblyzer import preprocess_wav
-                except Exception as e:
-                    logger.warning(f"Failed to import Resemblyzer preprocess_wav for file {audio_file}: {e}")
-                    continue
-
-                # Use cache if available
-                cached = self._preprocess_cache.get(audio_file)
-                if cached is not None:
-                    preprocessed_audio, _ = cached
-                else:
-                    preprocessed_audio = preprocess_wav(audio_data, sample_rate)
-                    try:
-                        self._preprocess_cache.set(audio_file, (preprocessed_audio, 16000))
-                    except Exception:
-                        pass
-                
-                # Generate embedding
-                embedding = self.encoder.embed_utterance(preprocessed_audio)  # type: ignore
-                embeddings.append(embedding)
+                embeddings.append(self.generate_embedding(audio_data, sample_rate, cache_path=audio_file))
             
             if len(embeddings) == 0:
                 raise SpeakerServiceError("No valid audio files for enrollment")
@@ -444,11 +567,7 @@ class SpeakerService:
             else:
                 final_embedding = embeddings[0]
             
-            # Store embedding
-            self.speaker_embeddings[user_id] = final_embedding
-            
-            # Save to disk
-            self._save_embeddings()
+            self.upsert_speaker_embedding(user_id, final_embedding)
             
             logger.info(f"Successfully enrolled speaker: {user_id} from {len(embeddings)} files")
             
@@ -486,74 +605,12 @@ class SpeakerService:
             SpeakerServiceError: If verification fails
         """
         try:
-            # Initialize encoder if not already done
-            self.initialize_encoder()
-            
-            # Check if there are any enrolled speakers
-            if not self.speaker_embeddings:
-                logger.warning("No enrolled speakers found for verification")
-                return "unknown", 0.0
-            
-            # Load and preprocess audio
-            audio_data, sample_rate = load_audio_file(audio_file_path)
-            
-            # Validate audio has sufficient duration
-            if not validate_audio_duration(
-                audio_data,
-                sample_rate,
-                min_duration=SPEAKER_CONFIG["min_speech_duration"]
-            ):
-                raise SpeakerServiceError(
-                    f"Audio is too short for verification (minimum {SPEAKER_CONFIG['min_speech_duration']}s)"
-                )
-            
-            # Preprocess for Resemblyzer (lazy import)
-            try:
-                from resemblyzer import preprocess_wav
-            except Exception as e:
-                error_msg = f"Failed to import Resemblyzer preprocess_wav: {e}"
-                logger.error(error_msg)
-                raise SpeakerServiceError(error_msg) from e
-
-            preprocessed_audio = preprocess_wav(audio_data, sample_rate)
-            
-            # Generate embedding for the input audio
-            test_embedding = self.encoder.embed_utterance(preprocessed_audio)  # type: ignore
-            
-            # Compare against all enrolled speakers
-            best_match_id = "unknown"
-            best_similarity = 0.0
-            
-            for user_id, stored_embedding in self.speaker_embeddings.items():
-                # Calculate cosine similarity between embeddings
-                # Reshape for sklearn
-                similarity = cosine_similarity(
-                    test_embedding.reshape(1, -1),
-                    stored_embedding.reshape(1, -1)
-                )[0][0]
-                
-                logger.debug(f"Similarity with {user_id}: {similarity:.4f}")
-                
-                if similarity > best_similarity:
-                    best_similarity = similarity
-                    best_match_id = user_id
-            
-            # Check if similarity meets threshold
-            threshold = SPEAKER_CONFIG["verification_threshold"]
-            
-            if best_similarity < threshold:
-                logger.info(
-                    f"No match found above threshold {threshold} "
-                    f"(best: {best_similarity:.4f})"
-                )
-                return "unknown", float(best_similarity)
-            
+            result = self.identify_speaker(audio_file_path)
             logger.info(
-                f"Verified speaker: {best_match_id} "
-                f"(confidence: {best_similarity:.4f})"
+                "Speaker identification decision=%s score=%.4f margin=%s",
+                result["decision"], result["similarity"], result["margin"],
             )
-            
-            return best_match_id, float(best_similarity)
+            return str(result["user_id"] or "unknown"), float(result["similarity"])
             
         except Exception as e:
             error_msg = f"Failed to verify speaker: {str(e)}"
@@ -567,7 +624,7 @@ class SpeakerService:
         Returns:
             List of user IDs for all enrolled speakers
         """
-        return list(self.speaker_embeddings.keys())
+        return list(self.get_speaker_embeddings_snapshot().keys())
     
     def delete_speaker(self, user_id: str) -> bool:
         """
@@ -583,12 +640,13 @@ class SpeakerService:
             SpeakerServiceError: If deletion fails
         """
         try:
-            if user_id not in self.speaker_embeddings:
+            current = self.get_speaker_embeddings_snapshot()
+            if user_id not in current:
                 logger.warning(f"Speaker not found: {user_id}")
                 return False
             
-            del self.speaker_embeddings[user_id]
-            self._save_embeddings()
+            del current[user_id]
+            self.replace_speaker_index(current)
             
             logger.info(f"Deleted speaker: {user_id}")
             return True
