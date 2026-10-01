@@ -32,6 +32,23 @@ CORRELATION_HEADER = "X-Correlation-ID"
 DEFAULT_TIMEOUT_SECONDS = float(os.getenv("NEXI_HARNESS_TIMEOUT", "90"))
 CONSOLE_OUTPUT_MODES = ("narrative", "trace", "debug")
 KNOWLEDGE_PREVIEW_LIMIT = 3
+SESSION_END_PROMPT = ROOT / "04_tts_service" / "voices" / "session_end_normal.wav"
+SESSION_END_TEXT = "Goodbye!"
+VOICE_DIR = ROOT / "04_tts_service" / "voices"
+# Text is used only when a recorded prompt is missing; ordinary playback uses the WAV.
+CACHED_PROMPTS = {
+    "profile_setup_start": ("profile_setup_start.wav", "Welcome to Nexi. Let's set up your profile."),
+    "session_start": ("session_start.wav", "Welcome, how can I help you today?"),
+    "teach_mode_start": ("teach_mode_start.wav", "Teaching mode activated. What would you like to teach me today?"),
+    "verification_failed": ("verification_failed.wav", "I don't recognize your voice. Please try again or enroll if you're a new user."),
+    "non_english_input": ("non_english_input.wav", "I currently only understand English."),
+    "no_knowledge": ("no_knowledge.wav", "I'm not familiar with this yet. Could you teach me?"),
+    "session_end_idle": ("session_end_idle.wav", "I haven't heard anything in a while, so I'm ending our conversation."),
+    "system_status_check": ("system_status_check.wav", "Nexi is checking its system status."),
+    "video_call_starting": ("video_call_starting.wav", "A video call is starting. I'll pause for a moment."),
+    "video_call_ended": ("video_call_ended.wav", "The call has ended. Let's continue."),
+    "object_taught_confirmation": ("object_taught_confirmation.wav", "I've learned that."),
+}
 
 
 def _service_url(environment_name: str, port: int) -> str:
@@ -223,10 +240,13 @@ class ConversationCallCounts:
 class SpaceSessionStop:
     """Watch SPACE without owning any application behavior."""
 
-    def __init__(self, on_stop) -> None:
+    def __init__(self, on_stop, *, message: str = "SPACE received: ending the whole conversation session...") -> None:
         self.requested = threading.Event()
         self._closed = threading.Event()
         self._on_stop = on_stop
+        self._message = message
+        self.reason = "space"
+        self._stop_lock = threading.Lock()
         self._keys: queue.Queue[str] = queue.Queue()
         self._thread = threading.Thread(target=self._watch, daemon=True)
 
@@ -277,8 +297,15 @@ class SpaceSessionStop:
         return False
 
     def _stop(self) -> None:
-        self.requested.set()
-        print("\nSPACE received: ending the whole conversation session...")
+        self.request_stop()
+
+    def request_stop(self, *, reason: str = "space", message: str | None = None) -> None:
+        with self._stop_lock:
+            if self.requested.is_set():
+                return
+            self.reason = reason
+            self.requested.set()
+        print("\n" + (message or self._message))
         try:
             self._on_stop()
         except Exception as exc:
@@ -738,6 +765,7 @@ def _capture_voice_samples(
 
 
 def _interactive_enrollment(console: "Sprint2Console") -> LiveResponse:
+    console._play_cached_prompt("profile_setup_start")
     name = input("User name: ").strip()
     if not name:
         raise ValueError("User name is required")
@@ -773,6 +801,7 @@ def _interactive_training(console: "Sprint2Console", *, replace: bool) -> LiveRe
 
 
 def _interactive_teach(console: "Sprint2Console") -> LiveResponse:
+    console._play_cached_prompt("teach_mode_start")
     item_type = input("Teach [fact/object]: ").strip().lower()
     if item_type == "fact":
         data = {
@@ -862,8 +891,12 @@ class Sprint2Console:
     def __init__(self, client: LiveRESTClient) -> None:
         self.client = client
         self.session = Session()
+        self._playback_gate = threading.Lock()
+        self._background_prompts: list[threading.Thread] = []
 
-    def health_dashboard(self) -> list[LiveResponse]:
+    def health_dashboard(self, *, announce: bool = True) -> list[LiveResponse]:
+        if announce:
+            self._start_cached_prompt("system_status_check")
         results: list[LiveResponse] = []
         rows: list[tuple[str, str, int, str | None]] = []
         for label, service, path in HEALTH_OPERATIONS:
@@ -1007,13 +1040,16 @@ class Sprint2Console:
             raise RuntimeError("Voice verification did not issue a valid session token")
 
     def teach(self, item_type: str, data: Mapping[str, Any]) -> LiveResponse:
-        return self.client.request(
+        response = self.client.request(
             "central",
             "POST",
             "/teachme/learn",
             internal=True,
             json_body={"type": item_type, "data": dict(data), "confidence": 1.0, "tags": ["manual-console"]},
         )
+        if item_type == "object" and response.ok:
+            self._start_cached_prompt("object_taught_confirmation")
+        return response
 
     def list_knowledge(self, item_type: str) -> LiveResponse:
         if item_type not in {"fact", "object"}:
@@ -1062,6 +1098,7 @@ class Sprint2Console:
 
     def call_start(self, call_id: str | None = None) -> LiveResponse:
         selected = call_id or f"manual-{uuid4().hex[:10]}"
+        self._start_cached_prompt("video_call_starting")
         response = self.client.request(
             "central", "POST", "/calls/start", internal=True, json_body={"call_id": selected}
         )
@@ -1073,6 +1110,7 @@ class Sprint2Console:
         selected = call_id or self.session.active_call_id
         if not selected:
             raise ValueError("No active call ID; start a call or supply its ID")
+        self._start_cached_prompt("video_call_ended")
         response = self.client.request(
             "central", "POST", "/calls/end", internal=True, json_body={"call_id": selected}
         )
@@ -1098,26 +1136,153 @@ class Sprint2Console:
     def return_user(self, mode: str = "manual") -> LiveResponse:
         """Drive Audio's wake or manual conversation surface over REST."""
         if mode == "wake":
-            started = self.client.request("audio", "POST", "/api/v1/wake-word/start", internal=True)
-            if not started.ok:
-                return started
-            try:
-                _wait_for_spacebar("Press SPACE after speaking to stop the wake/direct-voice listener")
-                return self.client.request("audio", "GET", "/api/v1/orchestration/health")
-            finally:
-                self.client.request("audio", "POST", "/api/v1/wake-word/stop", internal=True)
+            return self._wake_conversation()
         if mode != "manual":
             raise ValueError("Mode must be manual or wake")
-        return self._manual_conversation_loop()
+        return self._conversation_loop(mode="manual")
 
-    def _manual_conversation_loop(self) -> LiveResponse:
-        """Run a verify-once multi-turn session using service APIs only."""
-        _wait_for_spacebar("Press SPACE to start the manual conversation session")
+    def _wake_conversation(self) -> LiveResponse:
+        """Wait for Audio's opt-in wake event, then use the ordinary REST turn loop."""
+        started = self.client.request(
+            "audio", "POST", "/api/v1/wake-word/start",
+            internal=True, params={"event_mode": True},
+        )
+        if not started.ok:
+            return started
+        listener_stop = SpaceSessionStop(
+            lambda: None, message="SPACE received: cancelling the wake listener..."
+        )
+        listener_stop.start()
+        detected = False
+        try:
+            print("Listening for the wake word (SPACE cancels the listener).")
+            while not listener_stop.requested.is_set():
+                event = self.client.request_cancellable(
+                    "audio", "GET", "/api/v1/wake-word/events",
+                    internal=True, params={"timeout": 0.5},
+                    cancel_event=listener_stop.requested, display=False,
+                )
+                if not event.ok:
+                    return event
+                if isinstance(event.body, Mapping) and event.body.get("event_detected"):
+                    detected = True
+                    break
+        except ManualRequestCancelled:
+            pass
+        finally:
+            listener_stop.close()
+            self.client.request("audio", "POST", "/api/v1/wake-word/stop", internal=True)
+        if not detected or listener_stop.requested.is_set():
+            return self.client.request("audio", "GET", "/api/v1/orchestration/health")
+        print("Wake word detected. Speak your first query now.")
+        return self._conversation_loop(mode="wake")
+
+    def _play_audio_bytes(self, audio: bytes, *, request_fn=None) -> LiveResponse:
+        """One Audio-owned playback path, including its existing echo guard."""
+        send = request_fn or self.client.request
+        with self._playback_gate:
+            return send(
+                "audio", "POST", "/api/v1/playback/start", internal=True,
+                files={"file": ("nexi-response.wav", audio, "audio/wav")}, display=False,
+            )
+
+    def _play_cached_prompt(self, prompt_id: str, *, request_fn=None) -> LiveResponse:
+        """Use farewell's Audio playback path; synthesize only if the WAV is absent."""
+        filename, text = CACHED_PROMPTS[prompt_id]
+        send = request_fn or self.client.request
+        path = VOICE_DIR / filename
+        if path.is_file():
+            audio = path.read_bytes()
+        else:
+            speech = send(
+                "tts", "POST", "/speak", internal=True, display=False,
+                json_body={"text": text, "language": "en", "voice_id": "jenny"},
+            )
+            if not speech.ok:
+                return speech
+            if not speech.raw.startswith(b"RIFF"):
+                return LiveResponse(502, {}, {"message": "TTS returned no WAV audio"}, b"")
+            audio = speech.raw
+        return self._play_audio_bytes(audio, request_fn=send)
+
+    def _start_cached_prompt(self, prompt_id: str) -> None:
+        """Start a menu prompt while the real REST operation proceeds."""
+        def play() -> None:
+            try:
+                response = self._play_cached_prompt(prompt_id)
+                if not response.ok:
+                    print(f"{prompt_id.replace('_', ' ')} audio could not play.")
+            except Exception as exc:
+                print(f"{prompt_id.replace('_', ' ')} audio failed: {type(exc).__name__}: {exc}")
+
+        worker = threading.Thread(target=play, daemon=True)
+        self._background_prompts = [item for item in self._background_prompts if item.is_alive()]
+        self._background_prompts.append(worker)
+        worker.start()
+
+    def _wait_for_background_prompts(self) -> None:
+        for worker in self._background_prompts:
+            worker.join()
+        self._background_prompts.clear()
+
+    def _play_session_farewell(self) -> LiveResponse:
+        """Use the recorded Jenny clip; retain /speak as a missing-cache fallback."""
+        if SESSION_END_PROMPT.is_file():
+            audio = SESSION_END_PROMPT.read_bytes()
+        else:
+            speech = self.client.request(
+                "tts", "POST", "/speak", internal=True, display=False,
+                json_body={"text": SESSION_END_TEXT, "language": "en", "voice_id": "jenny"},
+            )
+            if not speech.ok or not speech.raw.startswith(b"RIFF"):
+                return speech
+            audio = speech.raw
+        return self._play_audio_bytes(audio)
+
+    def _end_conversation_session(
+        self, conversation_started: bool, rag_session_id: str | None, *, idle_end: bool = False
+    ) -> None:
+        """The shared manual/wake teardown; speak once before existing cleanup calls."""
+        if conversation_started:
+            farewell_stop = SpaceSessionStop(
+                lambda: self.client.request(
+                    "audio", "POST", "/api/v1/interrupt-playback", internal=True, display=False
+                ),
+                message="SPACE received: interrupting farewell playback...",
+            )
+            farewell_stop.start()
+            try:
+                farewell = (self._play_cached_prompt("session_end_idle") if idle_end
+                            else self._play_session_farewell())
+                if not farewell.ok:
+                    print("Farewell playback failed; ending the session anyway.")
+            except Exception as exc:
+                print(f"Farewell playback failed: {type(exc).__name__}: {exc}")
+            finally:
+                farewell_stop.close()
+        if conversation_started and self.session.token and self.session.user_id:
+            self.client.request(
+                "audio", "POST", "/api/v1/conversation/end", bearer=self.session.token,
+                params={"user_id": self.session.user_id}, display=False,
+            )
+        if rag_session_id:
+            self.client.request(
+                "central", "DELETE", f"/api/v1/rag/sessions/{quote(rag_session_id, safe='')}",
+                internal=True, display=False,
+            )
+        if conversation_started or rag_session_id:
+            print("Conversation session ended.")
+
+    def _conversation_loop(self, *, mode: str) -> LiveResponse:
+        """Run the same verify-once REST conversation turns for either trigger."""
+        if mode == "manual":
+            _wait_for_spacebar("Press SPACE to start the manual conversation session")
         counts = ConversationCallCounts()
         last_response = LiveResponse(0, {}, {"message": "Session ended before capture"}, b"")
         conversation_started = False
         rag_session_id: str | None = None
         idle_timeout_seconds = None
+        idle_end = False
 
         def interrupt_audio() -> None:
             self.client.request(
@@ -1126,11 +1291,41 @@ class Sprint2Console:
 
         stopper = SpaceSessionStop(interrupt_audio)
         stopper.start()
-        print("Manual capture ready. No Central session exists until speaker verification succeeds.")
+        if mode == "manual":
+            print("Manual capture ready. No Central session exists until speaker verification succeeds.")
+        stop_poll = threading.Event()
+        stop_thread: threading.Thread | None = None
+
+        def watch_stop_word() -> None:
+            while not stop_poll.is_set() and not stopper.requested.is_set():
+                try:
+                    event = self.client.request(
+                        "audio", "GET", "/api/v1/poll-stop-word", internal=True,
+                        params={"timeout": 0.5}, display=False,
+                    )
+                    if stop_poll.is_set():
+                        return
+                    if not event.ok:
+                        print("Stop-word detection is unavailable; use SPACE to end this session.")
+                        return
+                    if isinstance(event.body, Mapping) and event.body.get("event_detected"):
+                        stopper.request_stop(
+                            reason="stop_word", message="Stop NEXI detected: ending the conversation session..."
+                        )
+                        return
+                except Exception as exc:
+                    print(f"Stop-word polling failed: {type(exc).__name__}: {exc}")
+                    return
         turn_number = 0
         prior_counts = counts.snapshot()
         try:
-            if not stopper.wait_for_enter("Press ENTER to record your first query (SPACE cancels): "):
+            self._wait_for_background_prompts()
+            opening = self._play_cached_prompt("session_start")
+            if not opening.ok:
+                print("Session-start audio could not play; continuing to capture.")
+            if stopper.requested.is_set():
+                return last_response
+            if mode == "manual" and not stopper.wait_for_enter("Press ENTER to record your first query (SPACE cancels): "):
                 return last_response
 
             def request(service: str, method: str, path: str, **kwargs) -> LiveResponse:
@@ -1162,12 +1357,14 @@ class Sprint2Console:
                     )
                     state_body = audio_state.body if isinstance(audio_state.body, Mapping) else {}
                     if audio_state.ok and str(state_body.get("state", "")).casefold() == "idle":
+                        idle_end = True
                         print(
                             "Central's idle timeout ended the Audio session automatically"
                             + (f" after {idle_timeout_seconds}s without a RAG turn." if idle_timeout_seconds else ".")
                         )
                         break
                 print("\nAudio is recording. Speak naturally; recording stops when you finish speaking.")
+                self._wait_for_background_prompts()
                 counts.record += 1
                 recording = request(
                     "audio", "POST", "/api/v1/record-until-silence/audio",
@@ -1205,6 +1402,7 @@ class Sprint2Console:
                         break
                     body = verification.body if isinstance(verification.body, Mapping) else {}
                     if not verification.ok or not body.get("is_verified"):
+                        self._play_cached_prompt("verification_failed", request_fn=request)
                         report_counts(turn_number, prior_counts)
                         return verification
                     if not self.session.accept_token(body):
@@ -1245,6 +1443,9 @@ class Sprint2Console:
                         return started
                     conversation_started = True
                     first_turn = False
+                    if mode == "wake":
+                        stop_thread = threading.Thread(target=watch_stop_word, daemon=True)
+                        stop_thread.start()
 
                 print("Transcribing the recorded speech...")
                 counts.transcribe += 1
@@ -1280,6 +1481,9 @@ class Sprint2Console:
                 if best_similarity is not None:
                     print(f"Semantic similarity diagnostic: {float(best_similarity):.4f}")
                 if not rag.ok or not isinstance(rag.body, Mapping):
+                    code, _ = _error_details(rag.body, rag.status_code)
+                    if code == "english_only":
+                        self._play_cached_prompt("non_english_input", request_fn=request)
                     print(f"RAG request failed: {_response_message(rag.body, 'unknown error')}")
                     report_counts(turn_number, prior_counts)
                     continue
@@ -1291,10 +1495,11 @@ class Sprint2Console:
                 metadata = rag.body.get("metadata")
                 metadata_source = metadata.get("source") if isinstance(metadata, Mapping) else None
                 source = str(rag.body.get("source") or metadata_source or "")
-                if source == "no_match":
+                if source in {"no_match", "not_answerable"}:
                     print("No matching taught knowledge was found.")
-                    print(f"NEXI: {answer}")
-                    print("TTS was skipped. Listening for the next query...")
+                    print(f"NEXI: {CACHED_PROMPTS['no_knowledge'][1]}")
+                    self._play_cached_prompt("no_knowledge", request_fn=request)
+                    print("Listening for the next query...")
                     report_counts(turn_number, prior_counts)
                     continue
                 if source == "no_speech":
@@ -1316,6 +1521,10 @@ class Sprint2Console:
 
                 print("Basic command response:" if is_basic_command else "Matching taught knowledge was found.")
                 print(f"NEXI: {answer}")
+                if rag.headers.get("x-nexi-session-ended", "false").casefold() == "true":
+                    print("Farewell command received; playing the recorded goodbye before teardown.")
+                    report_counts(turn_number, prior_counts)
+                    break
                 print("Converting the response to Jenny speech...")
                 counts.speak += 1
                 speech = request(
@@ -1331,10 +1540,7 @@ class Sprint2Console:
                     continue
                 print("Speech synthesis completed. Playing the response...")
                 counts.playback += 1
-                playback = request(
-                    "audio", "POST", "/api/v1/playback/start", internal=True,
-                    files={"file": ("nexi-response.wav", speech.raw, "audio/wav")},
-                )
+                playback = self._play_audio_bytes(speech.raw, request_fn=request)
                 last_response = playback
                 if stopper.requested.is_set():
                     break
@@ -1346,33 +1552,23 @@ class Sprint2Console:
                         f"{_response_message(playback.body, 'audio output unavailable')}"
                     )
                 report_counts(turn_number, prior_counts)
-                if rag.headers.get("x-nexi-session-ended", "false").casefold() == "true":
-                    print("Farewell response played; the conversation session ended automatically.")
-                    break
 
             return last_response
         except ManualRequestCancelled:
-            print("SPACE cancelled the active REST request; downstream steps were not started.")
+            print(
+                "SPACE cancelled the active REST request; downstream steps were not started."
+                if stopper.reason == "space" else
+                "Stop word cancelled the active REST request; downstream steps were not started."
+            )
             if turn_number:
                 report_counts(turn_number, prior_counts)
             return last_response
         finally:
+            stop_poll.set()
+            if stop_thread is not None:
+                stop_thread.join(timeout=1.0)
             stopper.close()
-            if conversation_started and self.session.token and self.session.user_id:
-                self.client.request(
-                    "audio", "POST", "/api/v1/conversation/end", bearer=self.session.token,
-                    params={"user_id": self.session.user_id},
-                    display=False,
-                )
-            if rag_session_id:
-                self.client.request(
-                    "central", "DELETE",
-                    f"/api/v1/rag/sessions/{quote(rag_session_id, safe='')}",
-                    internal=True,
-                    display=False,
-                )
-            if conversation_started or rag_session_id:
-                print("Conversation session ended.")
+            self._end_conversation_session(conversation_started, rag_session_id, idle_end=idle_end)
 
     def audio_status(self) -> tuple[LiveResponse, LiveResponse]:
         print("Audio service circuit breaker and orchestration health (not general settings):")
@@ -1465,13 +1661,14 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     client = LiveRESTClient(output_mode=args.output)
+    console = Sprint2Console(client)
     try:
-        console = Sprint2Console(client)
         if args.health:
-            responses = console.health_dashboard()
+            responses = console.health_dashboard(announce=False)
             return 0 if all(response.status_code == 200 for response in responses) else 1
         return _interactive(console)
     finally:
+        console._wait_for_background_prompts()
         client.close()
 
 

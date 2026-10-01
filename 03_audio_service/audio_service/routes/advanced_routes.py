@@ -6,10 +6,12 @@ Implements endpoints for wake word detection, speaker verification, and speech-t
 import logging
 import os
 import asyncio
+import queue
 from datetime import datetime
 import numpy as np
-from fastapi import APIRouter, HTTPException, status, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, Request, status, UploadFile, File, Query
 from fastapi.responses import JSONResponse
+from shared.security import require_internal_service
 
 from audio_service.models import (
     WakeWordStatusResponse,
@@ -52,6 +54,7 @@ router = APIRouter(
 # Initialize services as singletons
 # These will be shared across all requests
 wake_word_service = WakeWordService()
+_wake_events: queue.Queue[dict] = queue.Queue(maxsize=10)
 stt_service = STTService()
 
 # Speaker service - LAZY initialization (only when needed)
@@ -77,7 +80,7 @@ def get_speaker_service():
         500: {"model": ErrorResponse, "description": "Failed to start wake word detection"}
     }
 )
-async def start_wake_word_detection():
+async def start_wake_word_detection(request: Request, event_mode: bool = False):
     """
     Start continuous wake word detection.
     
@@ -93,29 +96,44 @@ async def start_wake_word_detection():
     """
     try:
         logger.info("Received request to start wake word detection")
-        from main import orchestrator
-        if orchestrator is None:
-            raise HTTPException(status_code=503, detail="Conversation orchestrator unavailable")
-        loop = asyncio.get_running_loop()
-        
-        # Define callback for when wake word is detected
-        def on_wake_word_detected(audio_file: str, confidence: float):
-            """Schedule the same verified turn for wake word and direct voice."""
-            future = asyncio.run_coroutine_threadsafe(
-                orchestrator.process_conversation_turn(None, audio_file), loop
-            )
-
-            def report_result(completed):
+        if event_mode:
+            await require_internal_service(request)
+            # Opt-in only: the event consumer owns conversation turns, not this route.
+            while True:
                 try:
-                    turn = completed.result()
-                    if turn is None or turn.error:
-                        logger.error("Triggered conversation failed: %s", turn.error if turn else "no result")
-                    else:
-                        logger.info("Triggered conversation completed for user %s", turn.user_id)
-                except Exception:
-                    logger.exception("Triggered conversation raised")
+                    _wake_events.get_nowait()
+                except queue.Empty:
+                    break
 
-            future.add_done_callback(report_result)
+            def on_wake_word_detected(audio_file: str, confidence: float):
+                try:
+                    _wake_events.put_nowait({"event": "wake_word_detected", "confidence": confidence})
+                except queue.Full:
+                    logger.warning("Wake event queue full; dropping detection")
+        else:
+            from main import orchestrator
+            if orchestrator is None:
+                raise HTTPException(status_code=503, detail="Conversation orchestrator unavailable")
+            loop = asyncio.get_running_loop()
+
+            # Default behavior remains the existing server-owned single turn.
+            def on_wake_word_detected(audio_file: str, confidence: float):
+                """Schedule the same verified turn for wake word and direct voice."""
+                future = asyncio.run_coroutine_threadsafe(
+                    orchestrator.process_conversation_turn(None, audio_file), loop
+                )
+
+                def report_result(completed):
+                    try:
+                        turn = completed.result()
+                        if turn is None or turn.error:
+                            logger.error("Triggered conversation failed: %s", turn.error if turn else "no result")
+                        else:
+                            logger.info("Triggered conversation completed for user %s", turn.user_id)
+                    except Exception:
+                        logger.exception("Triggered conversation raised")
+
+                future.add_done_callback(report_result)
         
         # Start the wake word detection service
         wake_word_service.start_listening(detection_callback=on_wake_word_detected)
@@ -151,6 +169,19 @@ async def start_wake_word_detection():
                 "error_type": "InternalServerError"
             }
         )
+
+
+@router.get("/wake-word/events")
+async def poll_wake_word_event(
+    timeout: float = Query(1.0, ge=0.1, le=60.0),
+    _trusted: str | None = Depends(require_internal_service),
+):
+    """Consume a detection from an explicitly event-mode wake listener."""
+    try:
+        event = await asyncio.to_thread(_wake_events.get, True, timeout)
+    except queue.Empty:
+        event = None
+    return {"event_detected": event is not None, "event": event}
 
 
 @router.post(
