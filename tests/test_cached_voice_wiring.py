@@ -262,6 +262,8 @@ class TurnClient(RecordingClient):
             return reply(200, {}, {"session_id": "session-one"}, b"")
         if path == "/api/v1/transcribe":
             return reply(200, {}, {"text": "A short query"}, b"")
+        if path == "/api/v1/rag/commands/stop":
+            return reply(200, {}, {"is_stop_command": False}, b"")
         if path == "/api/v1/rag/query":
             if self.scenario == "non_english_input":
                 return reply(422, {}, {"error": {"code": "english_only", "message": "English-only input required"}}, b"")

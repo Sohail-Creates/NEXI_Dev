@@ -27,7 +27,13 @@ BASIC_COMMAND_RESPONSES = {
 
 def _normalize(text: str) -> str:
     words = re.findall(r"[a-z0-9']+", text.casefold())
-    return " ".join(words)
+    normalized = " ".join(words)
+    return "goodbye" if normalized == "good bye" else normalized
+
+
+def is_stop_command(text: str, farewell_phrases: frozenset[str]) -> bool:
+    """Only complete configured basic commands terminate a conversation."""
+    return classify_basic_command(text) is not None and _normalize(text) in farewell_phrases
 
 
 def classify_basic_command(text: str) -> Optional[str]:

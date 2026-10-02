@@ -295,10 +295,17 @@ async def record_until_silence_audio(
         if not result.get("success"):
             raise HTTPException(status_code=503, detail=result.get("error", "Recording failed"))
         end_reason = result.get("end_reason", result.get("stopped_by", "unknown"))
+        diagnostics = {
+            "X-NEXI-Recording-Speech-Active": str(result.get("speech_active", False)).lower(),
+            "X-NEXI-Recording-Speech-Duration": str(result.get("speech_duration", 0)),
+            "X-NEXI-Recording-RMS": str(result.get("rms", 0)),
+            "X-NEXI-Recording-Peak": str(result.get("peak", 0)),
+        }
         if end_reason in {"no_speech", "cancelled"}:
             return Response(
                 status_code=204,
                 headers={
+                    **diagnostics,
                     "X-NEXI-Recording-End-Reason": end_reason,
                     "X-NEXI-Recording-Duration": str(result.get("duration", 0)),
                 },
@@ -311,6 +318,7 @@ async def record_until_silence_audio(
             content=audio,
             media_type="audio/wav",
             headers={
+                **diagnostics,
                 "X-NEXI-Recording-Duration": str(result.get("duration", 0)),
                 "X-NEXI-Recording-Stop-Reason": str(end_reason),
                 "X-NEXI-Recording-End-Reason": str(end_reason),

@@ -19,7 +19,7 @@ from shared.jwt_manager import require_bearer_session_claims, require_session_cl
 from langdetect import DetectorFactory, LangDetectException, detect_langs
 from pydantic import BaseModel, ConfigDict, Field
 
-from basic_commands import classify_basic_command
+from basic_commands import classify_basic_command, is_stop_command
 from conversations_persistence import add_conversation
 from shared.clients.llm_client import LLMServiceClient
 from shared.semantic_embeddings import knowledge_text
@@ -465,6 +465,15 @@ async def _answer_while_connected(
 
 
 router = APIRouter(prefix="/api/v1/rag", tags=["restricted-rag"])
+
+
+@router.post("/commands/stop")
+def check_stop_command(request: RAGQueryRequest, http_request: Request):
+    """Classify a complete stop command without retrieval, generation or storage."""
+    require_session_claims(http_request)
+    return {"is_stop_command": is_stop_command(request.query, RAG_FAREWELL_PHRASES)}
+
+
 _llm_client = LLMServiceClient()
 
 
@@ -518,8 +527,7 @@ async def restricted_query(request: RAGQueryRequest, http_request: Request, resp
         pipeline = RestrictedRAGPipeline(get_teachme_connector(), _llm_client)
         result = await _answer_while_connected(pipeline, resolved_query, user_id, http_request)
         _update_session_entity(session_state, result)
-        normalized_command = " ".join(re.findall(r"[a-z0-9']+", request.query.casefold()))
-        is_farewell = result.source == "basic_command" and normalized_command in RAG_FAREWELL_PHRASES
+        is_farewell = result.source == "basic_command" and is_stop_command(request.query, RAG_FAREWELL_PHRASES)
         if is_farewell:
             with _rag_sessions_lock:
                 _rag_sessions.pop(session_id, None)

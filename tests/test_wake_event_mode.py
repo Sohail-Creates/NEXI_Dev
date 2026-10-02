@@ -129,6 +129,8 @@ class _RESTFixture:
             return response(200, {}, {"session_id": "session-one"}, b"")
         if path == "/api/v1/transcribe":
             return response(200, {}, {"text": "Goodbye"}, b"")
+        if path == "/api/v1/rag/commands/stop":
+            return response(200, {}, {"is_stop_command": True}, b"")
         if path == "/api/v1/rag/query":
             if self.stop_word:
                 return response(200, {}, {"response": "A grounded answer.", "source": "teachme_grounded"}, b"")
@@ -151,8 +153,8 @@ def test_manual_and_wake_share_turn_loop_and_cached_farewell(monkeypatch):
         assert paths.count("/api/v1/record-until-silence/audio") == 1
         assert paths.count("/api/v1/verify-speaker") == 1
         assert paths.count("/api/v1/transcribe") == 1
-        assert paths.count("/api/v1/rag/query") == 1
-        assert paths.count("/api/v1/playback/start") == 2  # opening, then farewell
+        assert paths.count("/api/v1/rag/query") == (0 if mode == "manual" else 1)
+        assert paths.count("/api/v1/playback/start") == (1 if mode == "manual" else 2)
         assert paths.index("/api/v1/playback/start") < paths.index("/api/v1/record-until-silence/audio")
         assert "/speak" not in paths
         assert paths.index("/api/v1/playback/start") < paths.index("/api/v1/conversation/end")
@@ -198,8 +200,16 @@ def test_manual_two_turns_reuse_verification_and_keep_grounded_tts(monkeypatch):
         def __init__(self):
             super().__init__()
             self.rag_count = 0
+            self.transcript_count = 0
 
         def request(self, service, method, path, **kwargs):
+            if path == "/api/v1/transcribe":
+                self.transcript_count += 1
+                self.calls.append((service, method, path, kwargs))
+                return console_module.LiveResponse(200, {}, {"text": "A normal question" if self.transcript_count == 1 else "Goodbye"}, b"")
+            if path == "/api/v1/rag/commands/stop":
+                self.calls.append((service, method, path, kwargs))
+                return console_module.LiveResponse(200, {}, {"is_stop_command": self.transcript_count > 1}, b"")
             if path == "/api/v1/rag/query":
                 self.rag_count += 1
                 if self.rag_count == 1:
@@ -217,6 +227,6 @@ def test_manual_two_turns_reuse_verification_and_keep_grounded_tts(monkeypatch):
     assert paths.count("/api/v1/record-until-silence/audio") == 2
     assert paths.count("/api/v1/verify-speaker") == 1
     assert paths.count("/api/v1/transcribe") == 2
-    assert paths.count("/api/v1/rag/query") == 2
+    assert paths.count("/api/v1/rag/query") == 1
     assert paths.count("/speak") == 1  # grounded answer, not farewell
-    assert paths.count("/api/v1/playback/start") == 3  # opening, answer, farewell
+    assert paths.count("/api/v1/playback/start") == 2  # opening, answer; silent stop

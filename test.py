@@ -124,6 +124,9 @@ def _safe_payload(value: Any, key: str = "") -> Any:
         "face_embeddings",
         "embedding",
         "embeddings",
+        "visual_embedding",
+        "instance_embedding",
+        "instance_prototypes",
     }
     if normalized in sensitive_names:
         if isinstance(value, list):
@@ -909,7 +912,122 @@ def _interactive_training(console: "Sprint2Console", *, replace: bool) -> LiveRe
         return console.improve_training(user_id, photos, voices)
 
 
-def _interactive_teach(console: "Sprint2Console") -> LiveResponse:
+def _object_candidates(response: LiveResponse) -> list[Mapping[str, Any]]:
+    """UI selection only; Vision owns all detection and embedding validation."""
+    if not response.ok or not isinstance(response.body, Mapping):
+        raise RuntimeError(_response_message(response.body, "Vision object detection failed"))
+    return [
+        item for item in response.body.get("detections", [])
+        if isinstance(item, Mapping) and item.get("class_id") != 0
+        and str(item.get("class_name", "")).casefold() != "person"
+    ]
+
+
+def _capture_object_observation(console: "Sprint2Console") -> Mapping[str, Any] | None:
+    """Preview paired REST observations; ENTER freezes the exact displayed frame."""
+    import cv2
+
+    camera = cv2.VideoCapture(int(os.getenv("VISION_CAMERA_DEVICE", "0")))
+    window = "NEXI object teaching"
+    cancel = threading.Event()
+    if not camera.isOpened():
+        camera.release()
+        raise RuntimeError("Cannot open the configured camera")
+
+    def detect(frame):
+        encoded, image = cv2.imencode(".jpg", frame)
+        if not encoded:
+            raise RuntimeError("Cannot encode camera frame")
+        response = console.client.request_cancellable(
+            "vision", "POST", "/api/v1/detect/objects/upload", internal=True,
+            files={"file": ("object-preview.jpg", image.tobytes(), "image/jpeg")},
+            cancel_event=cancel, display=False,
+        )
+        return frame, _object_candidates(response)
+
+    executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        # One in-flight request: bounded inference, no accumulating frame queue.
+        pending = None
+        validated_frame = None
+        candidates = []
+        while True:
+            ok, frame = camera.read()
+            if not ok or frame is None:
+                raise RuntimeError("Camera stopped returning frames")
+            if pending is not None and pending.done():
+                validated_frame, candidates = pending.result()
+                pending = None
+            if pending is None:
+                pending = executor.submit(detect, frame.copy())
+            # Never overlay an old detection on a different live frame.
+            preview = (validated_frame if validated_frame is not None else frame).copy()
+            ready = len(candidates) == 1 and bool(
+                candidates[0].get("embedding") and candidates[0].get("instance_embedding")
+            )
+            message = ("Waiting for Vision" if validated_frame is None else
+                       "No object detected" if not candidates else
+                       "Multiple objects detected - keep only one object in view" if len(candidates) > 1 else
+                       "One object ready" if ready else "Vision embeddings unavailable - cannot teach")
+            for item in candidates:
+                box = item["bounding_box"]
+                x, y, width, height = (box[key] for key in ("x", "y", "width", "height"))
+                cv2.rectangle(preview, (x, y), (x + width, y + height), (0, 255, 0), 2)
+                cv2.putText(preview, f"{item['class_name']} {item['confidence']:.2f}",
+                            (x, max(20, y - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            for index, line in enumerate((message, "ENTER = capture validated view; ESC/SPACE = cancel")):
+                cv2.putText(preview, line, (10, 25 + index * 25), cv2.FONT_HERSHEY_SIMPLEX,
+                            0.5, (0, 255, 255), 1)
+            cv2.imshow(window, preview)
+            key = cv2.waitKey(10) & 0xFF
+            if key in {27, 32}:
+                cancel.set()
+                return None
+            if key in {10, 13} and ready:
+                cancel.set()
+                # Includes embeddings from that exact uploaded frame/box;
+                # neither TeachMe nor the client captures another scene.
+                return dict(candidates[0])
+    finally:
+        cancel.set()
+        camera.release()
+        cv2.destroyAllWindows()
+        executor.shutdown(wait=True, cancel_futures=True)
+
+
+def _spoken_object_label(console: "Sprint2Console") -> str | None:
+    """Use Audio's existing transient capture and STT, with SPACE cancellation."""
+    stopper = SpaceSessionStop(lambda: console.client.request(
+        "audio", "POST", "/api/v1/interrupt-playback", internal=True, display=False
+    ))
+    stopper.start()
+    try:
+        if not stopper.wait_for_enter("Press ENTER and say your personal object label (SPACE cancels): "):
+            return None
+        recording = console.client.request_cancellable(
+            "audio", "POST", "/api/v1/record-until-silence/audio", internal=True,
+            cancel_event=stopper.requested, display=False,
+        )
+        if recording.status_code == 204:
+            print("No label captured; nothing was taught.")
+            return None
+        if not recording.ok or not recording.raw.startswith(b"RIFF"):
+            raise RuntimeError(_response_message(recording.body, "Object-label recording failed"))
+        transcript = console.client.request_cancellable(
+            "audio", "POST", "/api/v1/transcribe", internal=True, params={"language": "auto"},
+            files={"file": ("object-label.wav", recording.raw, "audio/wav")},
+            cancel_event=stopper.requested, display=False,
+        )
+        if not transcript.ok or not isinstance(transcript.body, Mapping):
+            raise RuntimeError(_response_message(transcript.body, "Object-label transcription failed"))
+        return str(transcript.body.get("text") or "").strip() or None
+    except ManualRequestCancelled:
+        return None
+    finally:
+        stopper.close()
+
+
+def _interactive_teach(console: "Sprint2Console") -> LiveResponse | None:
     console._play_cached_prompt("teach_mode_start")
     item_type = input("Teach [fact/object]: ").strip().lower()
     if item_type == "fact":
@@ -920,31 +1038,18 @@ def _interactive_teach(console: "Sprint2Console") -> LiveResponse:
             "context": {},
         }
     elif item_type == "object":
-        data = {
-            "name": input("Object name: ").strip(),
-            "category": input("Category (optional): ").strip() or None,
-            "description": input("Description (optional): ").strip() or None,
-            "attributes": {},
-        }
-        observation = console.client.request(
-            "vision", "POST", "/api/v1/detect/objects", internal=True, display=False
-        )
-        detections = (
-            observation.body.get("detections", [])
-            if observation.ok and isinstance(observation.body, Mapping) else []
-        )
-        if detections:
-            print("Detected objects:")
-            for index, detected in enumerate(detections, 1):
-                print(f"  {index}. {detected.get('class_name', 'object')} "
-                      f"({detected.get('confidence', 0):.2f})")
-            choice = input("Object number to teach (ENTER skips selection): ").strip()
-            if choice:
-                if not choice.isdecimal() or not 1 <= int(choice) <= len(detections):
-                    raise ValueError("Choose a listed object number")
-                data["vision_observation"] = detections[int(choice) - 1]
-        else:
-            print("No object selected; TeachMe will use its existing capture path.")
+        console._speak_instruction("Place exactly one object in front of the camera. Press Enter when ready.")
+        observation = _capture_object_observation(console)
+        if observation is None:
+            print("Object capture cancelled; nothing was taught.")
+            return None
+        console._speak_instruction("Object captured. Press Enter and tell me what you call this object.")
+        label = _spoken_object_label(console)
+        if not label:
+            print("Object labeling cancelled or empty; nothing was taught.")
+            return None
+        data = {"name": label, "category": observation["class_name"], "description": "",
+                "attributes": {}, "vision_observation": observation}
     else:
         raise ValueError("Choose fact or object")
     return console.teach(item_type, data)
@@ -1158,16 +1263,46 @@ class Sprint2Console:
             raise RuntimeError("Voice verification did not issue a valid session token")
 
     def teach(self, item_type: str, data: Mapping[str, Any]) -> LiveResponse:
+        selected = item_type == "object" and "vision_observation" in data
         response = self.client.request(
             "central",
             "POST",
             "/teachme/learn",
             internal=True,
+            display=not selected,
             json_body={"type": item_type, "data": dict(data), "confidence": 1.0, "tags": ["manual-console"]},
         )
+        if selected and response.ok:
+            item_id = response.body.get("item_id") if isinstance(response.body, Mapping) else None
+            if not item_id or not response.body.get("success"):
+                return LiveResponse(502, {}, {"message": "Teach response did not confirm an object record"}, b"")
+            stored = self.list_knowledge("object")
+            records = stored.body.get("objects", []) if stored.ok and isinstance(stored.body, Mapping) else []
+            record = next((item for item in records if item.get("id") == item_id), None)
+            observation = data["vision_observation"]
+            if (
+                not record
+                or record.get("data", {}).get("name") != data["name"]
+                or record.get("data", {}).get("category") != data["category"]
+                or record.get("visual_embedding") != observation["embedding"]
+                or observation["instance_embedding"] not in (record.get("instance_prototypes") or [])
+            ):
+                return LiveResponse(502, {}, {"message": "Object persistence could not be verified; do not assume teaching succeeded"}, b"")
+            print(f"Object taught: {data['name']} ({data['category']}); record {item_id}; visual and instance observations verified.")
         if item_type == "object" and response.ok:
             self._start_cached_prompt("object_taught_confirmation")
         return response
+
+    def _speak_instruction(self, text: str) -> None:
+        print(text)
+        response = self.client.request(
+            "tts", "POST", "/speak", internal=True, display=False,
+            json_body={"text": text, "language": "en", "voice_id": "jenny"},
+        )
+        if not response.ok or not response.raw.startswith(b"RIFF"):
+            raise RuntimeError("Object instruction synthesis failed")
+        if not self._play_audio_bytes(response.raw).ok:
+            raise RuntimeError("Object instruction playback failed")
 
     def list_knowledge(self, item_type: str) -> LiveResponse:
         if item_type not in {"fact", "object"}:
@@ -1358,10 +1493,11 @@ class Sprint2Console:
         return self._play_audio_bytes(audio)
 
     def _end_conversation_session(
-        self, conversation_started: bool, rag_session_id: str | None, *, idle_end: bool = False
+        self, conversation_started: bool, rag_session_id: str | None, *, idle_end: bool = False,
+        silent: bool = False,
     ) -> None:
         """The shared manual/wake teardown; speak once before existing cleanup calls."""
-        if conversation_started:
+        if conversation_started and not silent:
             farewell_stop = SpaceSessionStop(
                 lambda: self.client.request(
                     "audio", "POST", "/api/v1/interrupt-playback", internal=True, display=False
@@ -1401,6 +1537,7 @@ class Sprint2Console:
         rag_session_id: str | None = None
         idle_timeout_seconds = None
         idle_end = False
+        transcript_stop = False
 
         def interrupt_audio() -> None:
             self.client.request(
@@ -1492,10 +1629,17 @@ class Sprint2Console:
                 if stopper.requested.is_set():
                     break
                 end_reason = recording.headers.get("x-nexi-recording-end-reason", "unknown")
+                if self.client.output_mode == "debug":
+                    print("Capture diagnostics: " + ", ".join(
+                        f"{name}={recording.headers.get('x-nexi-recording-' + name, 'not available')}"
+                        for name in ("duration", "speech-active", "speech-duration", "rms", "peak")
+                    ))
                 if recording.status_code == 204 and end_reason in {"no_speech", "cancelled"}:
                     print(f"Capture ended: {end_reason}. STT was skipped.")
                     report_counts(turn_number, prior_counts)
                     if end_reason == "cancelled":
+                        break
+                    if mode == "manual" and not stopper.wait_for_enter("No speech captured. Press ENTER to try again (SPACE ends session): "):
                         break
                     continue
                 if not recording.ok or not recording.raw.startswith(b"RIFF"):
@@ -1585,6 +1729,25 @@ class Sprint2Console:
                     report_counts(turn_number, prior_counts)
                     continue
                 print(f'Transcribed text: "{transcript}"')
+
+                if mode == "manual":
+                    command = request(
+                        "central", "POST", "/api/v1/rag/commands/stop", bearer=self.session.token,
+                        json_body={"query": transcript},
+                    )
+                    if (
+                        not command.ok or not isinstance(command.body, Mapping)
+                        or not isinstance(command.body.get("is_stop_command"), bool)
+                    ):
+                        print("Stop-command check failed; query was not sent to RAG.")
+                        return command
+                    if self.client.output_mode == "debug":
+                        print(f"Stop-command detector invoked: result={command.body['is_stop_command']}")
+                    if command.body.get("is_stop_command"):
+                        transcript_stop = True
+                        print("Stop command received; closing the session without RAG or speech playback.")
+                        report_counts(turn_number, prior_counts)
+                        break
 
                 print("Sending the transcribed query through restricted RAG...")
                 counts.rag += 1
@@ -1686,7 +1849,7 @@ class Sprint2Console:
             if stop_thread is not None:
                 stop_thread.join(timeout=1.0)
             stopper.close()
-            self._end_conversation_session(conversation_started, rag_session_id, idle_end=idle_end)
+            self._end_conversation_session(conversation_started, rag_session_id, idle_end=idle_end, silent=transcript_stop)
 
     def audio_status(self) -> tuple[LiveResponse, LiveResponse]:
         print("Audio service circuit breaker and orchestration health (not general settings):")

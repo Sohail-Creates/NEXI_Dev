@@ -140,6 +140,9 @@ class VADRecorder:
             chunks_recorded = 0
             stopped_by = "safety_timeout"
             pending_speech = []
+            square_sum = 0.0
+            sample_count = 0
+            peak = 0.0
             
             # Calculate silence threshold in chunks
             # silence_threshold_ms / (chunk_size_ms) = silence_threshold_chunks
@@ -172,6 +175,10 @@ class VADRecorder:
                     
                     # Convert to numpy array
                     audio_array = np.frombuffer(audio_chunk, dtype=np.int16).astype(np.float32)
+                    normalized = audio_array / 32768.0
+                    square_sum += float(np.sum(normalized * normalized))
+                    sample_count += len(normalized)
+                    peak = max(peak, float(np.max(np.abs(normalized))))
                     
                     chunks_recorded += 1
                     
@@ -265,6 +272,17 @@ class VADRecorder:
                 "sample_rate": self.sample_rate,
                 "success": True
             }
+            result.update(
+                speech_active=inside_speech_region,
+                speech_duration=speech_chunks * self.chunk_size / self.sample_rate,
+                rms=math.sqrt(square_sum / sample_count) if sample_count else 0.0,
+                peak=peak,
+            )
+            logger.info(
+                "capture_result end_reason=%s duration=%.3f speech_active=%s speech_duration=%.3f rms=%.5f peak=%.5f",
+                stopped_by, actual_duration, result["speech_active"], result["speech_duration"],
+                result["rms"], result["peak"],
+            )
             
             logger.info(
                 f"✓ Recording complete: {actual_duration:.2f}s, "
