@@ -80,6 +80,30 @@ def test_index_replacement_is_complete_and_deletion_safe(monkeypatch, tmp_path):
     assert set(service.get_speaker_embeddings_snapshot()) == {"a", "c"}
 
 
+def test_failed_central_sync_preserves_live_candidate_index(monkeypatch):
+    import asyncio
+    import requests
+    from audio_service.routes import advanced_routes
+
+    class ExistingIndex:
+        speaker_embeddings = {"existing": np.asarray(vector(7), dtype=np.float32)}
+
+        def build_candidate_index(self, users):
+            raise AssertionError("candidate build must not run after a failed Central fetch")
+
+        def replace_speaker_index(self, candidates):
+            raise AssertionError("live index must not be replaced after a failed Central fetch")
+
+    service = ExistingIndex()
+    monkeypatch.setattr(advanced_routes, "get_speaker_service", lambda: service)
+    monkeypatch.setattr(requests, "get", lambda *args, **kwargs: (_ for _ in ()).throw(requests.ConnectionError("offline")))
+
+    result = asyncio.run(advanced_routes.sync_speakers_from_central())
+
+    assert result["success"] is False
+    assert set(service.speaker_embeddings) == {"existing"}
+
+
 def test_central_writer_canonicalizes_singular_and_flat_shapes():
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "01_central_server"))
     from routes.user_routes import _canonicalize_voice_fields

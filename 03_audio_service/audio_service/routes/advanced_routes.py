@@ -1037,15 +1037,6 @@ async def verify_speaker(file: UploadFile = File(...)):
 
 # Voice Embedding Processing Endpoint (for enrollment service)
 
-@router.post(
-    "/process-voice",
-    status_code=status.HTTP_200_OK,
-    responses={
-        200: {"description": "Voice embedding extracted successfully"},
-        400: {"model": ErrorResponse, "description": "Invalid audio file"},
-        500: {"model": ErrorResponse, "description": "Processing failed"}
-    }
-)
 def _extract_voice_embedding_sync(audio_path: str) -> tuple[list[float], float]:
     from audio_service.utils.audio_preprocessing import load_audio_file, validate_audio_duration
     waveform, sample_rate = load_audio_file(audio_path)
@@ -1061,6 +1052,15 @@ def _extract_voice_embedding_sync(audio_path: str) -> tuple[list[float], float]:
     return embedding.astype(float).tolist(), processed_rms
 
 
+@router.post(
+    "/process-voice",
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "Voice embedding extracted successfully"},
+        400: {"model": ErrorResponse, "description": "Invalid audio file"},
+        500: {"model": ErrorResponse, "description": "Processing failed"}
+    }
+)
 async def process_voice_file(file: UploadFile = File(...)):
     """
     Extract voice embedding from uploaded audio file.

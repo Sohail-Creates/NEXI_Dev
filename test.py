@@ -53,7 +53,12 @@ CACHED_PROMPTS = {
 
 def _service_url(environment_name: str, port: int) -> str:
     """Read one service URL from configuration and enforce an HTTPS default."""
-    return os.getenv(environment_name, f"https://localhost:{port}").rstrip("/")
+    url = os.getenv(environment_name, f"https://127.0.0.1:{port}").rstrip("/")
+    # The local stack binds IPv4 and its certificate covers 127.0.0.1.
+    # On Windows a fresh localhost connection can wait for IPv6 first.
+    if url.lower().startswith("https://localhost:"):
+        url = "https://127.0.0.1:" + url[len("https://localhost:"):]
+    return url
 
 
 @dataclass(frozen=True)

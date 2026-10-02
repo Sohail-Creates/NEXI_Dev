@@ -38,11 +38,11 @@ class _SynthesizedSpeakerMatcher:
     def __init__(self, user_id: str):
         self.user_id = user_id
 
-    def verify_speaker(self, _audio_file_path: str):
-        return self.user_id, 0.99
-
-    def get_verification_threshold(self):
-        return 0.65
+    def identify_speaker(self, _audio_file_path: str):
+        return {
+            "decision": "matched", "user_id": self.user_id, "similarity": 0.99,
+            "margin": 0.2, "threshold": 0.65, "min_margin": 0.0,
+        }
 
 
 class _MemoryTeachMe:
@@ -98,7 +98,7 @@ def test_e2e_enroll_verify_grounded_answer_persist_and_sync_eligible(monkeypatch
             json={
                 "name": "Phase Eight User",
                 "face_embeddings": [[0.1, 0.2]],
-                "voice_embeddings": [[0.3, 0.4]],
+                "voice_embeddings": [[0.3] * 256],
                 "enrollment_timestamp": "2026-09-11T00:00:00Z",
             },
         )

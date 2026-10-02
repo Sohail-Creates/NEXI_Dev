@@ -147,7 +147,7 @@ def test_identity_contract_uses_user_id_end_to_end(monkeypatch) -> None:
         response = central.post(
             "/users",
             headers={"X-NEXI-Service-Token": SERVICE_TOKEN},
-            json={"name": "Phase Six User", "voice_embeddings": [[0.1]], "face_embeddings": [[0.2]]},
+            json={"name": "Phase Six User", "voice_embeddings": [[0.1] * 256], "face_embeddings": [[0.2]]},
         )
     assert response.status_code == 200, response.text
     user_id = response.json()["user_id"]

@@ -69,11 +69,16 @@ def test_j_match_issues_token_no_match_does_not_and_expiry_fails(monkeypatch):
     class Matcher:
         match = True
 
-        def verify_speaker(self, _path):
-            return ("user-a", 0.99) if self.match else ("unknown", 0.10)
-
-        def get_verification_threshold(self):
-            return 0.65
+        def identify_speaker(self, _path):
+            if self.match:
+                return {
+                    "decision": "matched", "user_id": "user-a", "similarity": 0.99,
+                    "margin": 0.2, "threshold": 0.65, "min_margin": 0.0,
+                }
+            return {
+                "decision": "unknown", "user_id": None, "similarity": 0.10,
+                "margin": 0.01, "threshold": 0.65, "min_margin": 0.0,
+            }
 
     matcher = Matcher()
     monkeypatch.setattr(advanced_routes, "get_speaker_service", lambda: matcher)

@@ -63,6 +63,16 @@ class PlaybackManager:
         self.current_audio = None
         self.playback_position = 0
         self.interrupt_callback = None
+        self._output_stream = None
+        self._output_format = None
+
+        # Opening the Windows output device takes much longer than starting an
+        # already-open stream. Prepare the usual TTS format before the first
+        # prompt; a missing device must not prevent Audio from starting.
+        try:
+            self._get_output_stream(sample_rate, self.channels)
+        except Exception as exc:
+            logger.warning("Playback device warm-up failed: %s", exc)
         
         logger.info(
             f"PlaybackManager initialized: sr={sample_rate}Hz, "
@@ -219,13 +229,11 @@ class PlaybackManager:
             
             logger.debug(f"Playback loop started: {audio_frames.shape[0]} frames, sr={sr}Hz")
             
-            # Play through sounddevice
-            with sd.OutputStream(
-                samplerate=sr,
-                channels=channels,
-                device=self.device_id,
-                dtype='float32'
-            ) as stream:
+            # Reuse the opened device; start/stop are fast and leave it ready
+            # for the next prompt without holding an active audio stream idle.
+            stream = self._get_output_stream(sr, channels)
+            try:
+                stream.start()
                 # Play audio in chunks, checking for interrupt flag
                 chunk_size = sr // 10  # 100ms chunks
                 total_frames = audio_frames.shape[0]
@@ -251,10 +259,41 @@ class PlaybackManager:
                         logger.debug(f"Playback progress: {elapsed:.1f}s / {total:.1f}s")
                 
                 logger.info(f"Playback loop ended at {self.playback_position}/{total_frames}")
+            finally:
+                try:
+                    stream.stop()
+                except Exception:
+                    self._close_output_stream()
+                    raise
         
         except Exception as e:
             logger.error(f"Playback loop error: {e}")
             self.playback_error = str(e)
+            self._close_output_stream()
+
+    def _get_output_stream(self, sample_rate: int, channels: int):
+        audio_format = (sample_rate, channels)
+        if self._output_stream is None or self._output_format != audio_format:
+            self._close_output_stream()
+            self._output_stream = sd.OutputStream(
+                samplerate=sample_rate, channels=channels,
+                device=self.device_id, dtype='float32'
+            )
+            self._output_format = audio_format
+        return self._output_stream
+
+    def _close_output_stream(self):
+        stream = self._output_stream
+        self._output_stream = None
+        self._output_format = None
+        if stream is not None:
+            stream.close()
+
+    def close(self):
+        """Release the output device when the Audio service shuts down."""
+        with self.playback_lock:
+            self.stop_playback_internal()
+            self._close_output_stream()
     
     def stop_playback_internal(self):
         """

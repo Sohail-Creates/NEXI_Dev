@@ -289,7 +289,7 @@ async def lifespan(app: FastAPI):
     if playback_manager:
         try:
             logger.info("Stopping playback manager...")
-            playback_manager.stop_playback()
+            playback_manager.close()
             logger.info("Playback manager stopped")
         except Exception as e:
             logger.error(f"Error stopping playback manager: {e}")

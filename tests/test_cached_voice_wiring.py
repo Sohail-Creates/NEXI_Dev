@@ -4,10 +4,73 @@ from __future__ import annotations
 
 import threading
 import time
+import io
+import importlib.util
+from pathlib import Path
+import wave
 
 import pytest
 
 import test as console_module
+
+
+def test_local_service_url_uses_ipv4_without_rewriting_remote_hosts(monkeypatch):
+    monkeypatch.setenv("AUDIO_SERVICE_URL", "https://localhost:8002")
+    assert console_module.ServiceURLs().audio == "https://127.0.0.1:8002"
+    monkeypatch.setenv("AUDIO_SERVICE_URL", "https://audio.example.test:8002")
+    assert console_module.ServiceURLs().audio == "https://audio.example.test:8002"
+
+
+def test_audio_playback_reuses_preopened_device_and_closes_on_shutdown(monkeypatch):
+    module_path = Path(__file__).resolve().parents[1] / "03_audio_service/audio_service/services/playback_manager.py"
+    spec = importlib.util.spec_from_file_location("audio_playback_under_test", module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    streams = []
+
+    class FakeStream:
+        def __init__(self, **kwargs):
+            self.format = (kwargs["samplerate"], kwargs["channels"])
+            self.starts = 0
+            self.writes = 0
+            self.closed = False
+            streams.append(self)
+
+        def start(self):
+            self.starts += 1
+
+        def write(self, chunk):
+            self.writes += len(chunk)
+
+        def stop(self):
+            pass
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(module.sd, "OutputStream", FakeStream)
+
+    def wav_bytes(sample_rate):
+        buffer = io.BytesIO()
+        with wave.open(buffer, "wb") as recording:
+            recording.setnchannels(1)
+            recording.setsampwidth(2)
+            recording.setframerate(sample_rate)
+            recording.writeframes(b"\x01\x00" * (sample_rate // 10))
+        return buffer.getvalue()
+
+    manager = module.PlaybackManager()
+    assert len(streams) == 1  # Device is ready before the first menu action.
+    assert manager.play_audio_bytes(wav_bytes(22050))["success"]
+    assert manager.play_audio_bytes(wav_bytes(22050))["success"]
+    assert len(streams) == 1 and streams[0].starts == 2
+    assert streams[0].writes == 4410
+    assert manager.play_audio_bytes(wav_bytes(16000))["success"]
+    assert len(streams) == 2 and streams[0].closed
+    assert streams[1].format == (16000, 1)
+    manager.close()
+    assert streams[1].closed
 
 
 class RecordingClient:
