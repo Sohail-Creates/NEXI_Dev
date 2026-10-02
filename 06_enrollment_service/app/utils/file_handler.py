@@ -41,8 +41,14 @@ async def save_uploaded_file(
     # Ensure directory exists
     os.makedirs(upload_dir, exist_ok=True)
     
-    # Save file
-    with open(filepath, 'wb') as f:
-        f.write(content)
+    # A failed write has no returned path for the caller to clean up.
+    saved = False
+    try:
+        with open(filepath, 'wb') as f:
+            f.write(content)
+        saved = True
+    finally:
+        if not saved:
+            Path(filepath).unlink(missing_ok=True)
     
     return filepath

@@ -3,6 +3,11 @@
 from pathlib import Path
 import sys
 from unittest.mock import AsyncMock, Mock
+import asyncio
+import io
+from types import SimpleNamespace
+from contextlib import contextmanager
+from starlette.datastructures import Headers
 
 import httpx
 import pytest
@@ -19,6 +24,55 @@ from shared.api_errors import install_error_handlers
 
 
 pytestmark = pytest.mark.contract
+
+
+@pytest.mark.asyncio
+async def test_failed_upload_write_removes_partial_file(monkeypatch, tmp_path):
+    from app.utils import file_handler
+    real_open = open
+
+    @contextmanager
+    def interrupted_write(path, mode):
+        with real_open(path, mode) as handle:
+            def fail(content):
+                handle.write(content[:1])
+                raise OSError("Simulated disk-full write")
+            yield SimpleNamespace(write=fail)
+
+    monkeypatch.setattr(file_handler, "open", interrupted_write, raising=False)
+    upload = UploadFile(filename="photo.jpg", file=io.BytesIO(b"photo"),
+                        headers=Headers({"content-type": "image/jpeg"}))
+    with pytest.raises(OSError, match="Simulated disk-full"):
+        await file_handler.save_uploaded_file(upload, str(tmp_path), ["image/jpeg"], 1024)
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["process_enrollment", "improve_training", "update_model"])
+async def test_cancelled_enrollment_removes_all_temporary_uploads(monkeypatch, tmp_path, operation):
+    """Cancellation is BaseException, so ordinary exception handlers are insufficient."""
+    service = enrollment_module.EnrollmentService.__new__(enrollment_module.EnrollmentService)
+    service.upload_dir = str(tmp_path)
+    service.max_photo_size = enrollment_module.EnrollmentValidator.MAX_PHOTO_SIZE
+    service.max_voice_size = enrollment_module.EnrollmentValidator.MAX_AUDIO_SIZE
+    service.storage = SimpleNamespace(get_enrollment_smart=AsyncMock(return_value={"user_id": "existing"}))
+    service.photo_validation = SimpleNamespace(
+        get_face_embedding=AsyncMock(side_effect=asyncio.CancelledError()), clear=Mock())
+    monkeypatch.setattr(enrollment_module.EnrollmentValidator, "validate_all_photos", AsyncMock())
+    monkeypatch.setattr(enrollment_module.EnrollmentValidator, "validate_all_audio", AsyncMock())
+
+    async def save(upload, *args):
+        path = tmp_path / upload.filename
+        path.write_bytes(await upload.read())
+        return str(path)
+
+    monkeypatch.setattr(enrollment_module, "save_uploaded_file", save)
+    photos = [UploadFile(filename=f"photo_{i}.jpg", file=io.BytesIO(b"photo")) for i in range(5)]
+    voices = [UploadFile(filename=f"voice_{i}.wav", file=io.BytesIO(b"voice")) for i in range(5)]
+    with pytest.raises(asyncio.CancelledError):
+        await getattr(service, operation)("Existing User" if operation == "process_enrollment" else "existing", photos, voices)
+    assert not list(tmp_path.iterdir())
+    service.photo_validation.clear.assert_called_once()
 
 
 def vision_client(monkeypatch, handler):

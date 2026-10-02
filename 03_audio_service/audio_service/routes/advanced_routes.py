@@ -616,166 +616,6 @@ async def _legacy_sync_speakers_from_central():
         Dictionary with sync status, count of speakers synced, and validation results
     """
     return await sync_speakers_from_central()
-    try:
-        import requests
-        import numpy as np
-        from config.ports import ServicePorts
-        
-        logger.info("="*70)
-        logger.info(" SPEAKER SYNC INITIATED FROM CENTRAL SERVER")
-        logger.info("="*70)
-        
-        # Get Central Server URL
-        central_url = ServicePorts.get_base_url("central")
-        
-        # Fetch all users from Central Server
-        try:
-            from shared.security import internal_service_headers
-            from config.ssl_config import client_verify
-            response = requests.get(
-                f"{central_url}/users/list", headers=internal_service_headers(), timeout=10,
-                verify=client_verify(central_url),
-            )
-            if response.status_code != 200:
-                logger.error(f"Failed to fetch users from Central Server: {response.status_code}")
-                return {
-                    "success": False,
-                    "message": "Failed to fetch users from Central Server",
-                    "speakers_synced": 0
-                }
-            
-            users_response = response.json()
-            users = users_response.get("users", []) if isinstance(users_response, dict) else users_response
-            
-            if not isinstance(users, list):
-                users = []
-            
-            logger.info(f"Fetched {len(users)} users from Central Server")
-            
-        except Exception as e:
-            logger.error(f"Error fetching users from Central Server: {str(e)}")
-            return {
-                "success": False,
-                "message": f"Failed to fetch from Central Server: {str(e)}",
-                "speakers_synced": 0
-            }
-        
-        # Extract voice embeddings from users
-        synced_count = 0
-        skipped_count = 0
-        validation_issues = []
-        speaker_service = get_speaker_service()
-        
-        # CRITICAL: Clear old embeddings before syncing (fresh sync)
-        logger.info(f"[PRE-SYNC] Audio Service has {len(speaker_service.speaker_embeddings)} speakers. Clearing for fresh sync...")
-        speaker_service.speaker_embeddings.clear()
-        logger.info("[PRE-SYNC]  Cleared. Ready to sync fresh data.")
-        
-        for user_idx, user in enumerate(users):
-            try:
-                # Handle both "user_id" and "id" field names (defensive programming)
-                user_id = user.get("user_id") or user.get("id")
-                if not user_id:
-                    logger.warning(f"User record {user_idx} missing both user_id and id fields")
-                    validation_issues.append(f"User {user_idx}: missing ID field")
-                    skipped_count += 1
-                    continue
-                
-                # Get voice embeddings (List[List[float]] from Central Server)
-                voice_embeddings = user.get("voice_embeddings", [])
-                
-                if not voice_embeddings:
-                    logger.debug(f"User {user_id} has no voice embeddings")
-                    skipped_count += 1
-                    continue
-                
-                # Validate embedding format
-                if not isinstance(voice_embeddings, list) or len(voice_embeddings) == 0:
-                    logger.warning(f"User {user_id}: invalid embedding format (not a list or empty)")
-                    validation_issues.append(f"User {user_id}: invalid embedding format")
-                    skipped_count += 1
-                    continue
-                
-                # Check if embeddings are lists (expected format)
-                if not isinstance(voice_embeddings[0], (list, np.ndarray)):
-                    logger.warning(f"User {user_id}: expected List[List[float]], got List[{type(voice_embeddings[0]).__name__}]")
-                    validation_issues.append(f"User {user_id}: embedding is not nested list")
-                    skipped_count += 1
-                    continue
-                
-                # Convert to numpy arrays for averaging
-                try:
-                    embeddings_array = np.array(voice_embeddings, dtype=np.float32)
-                    
-                    # Average all voice embeddings into one (Resemblyzer pattern)
-                    avg_embedding = np.mean(embeddings_array, axis=0)
-                    
-                    # Validate averaged embedding size (should be 256 for Resemblyzer)
-                    if len(avg_embedding) != 256:
-                        logger.warning(
-                            f"User {user_id}: embedding dimension is {len(avg_embedding)}, "
-                            f"expected 256 (Resemblyzer standard)"
-                        )
-                        validation_issues.append(
-                            f"User {user_id}: embedding size {len(avg_embedding)} (expected 256)"
-                        )
-                    
-                    # Update the speaker service embeddings
-                    speaker_service.speaker_embeddings[user_id] = avg_embedding
-                    
-                    # VERIFY: Check it was actually stored
-                    if user_id in speaker_service.speaker_embeddings:
-                        synced_count += 1
-                        logger.info(f" [{synced_count}] {user_id}: Stored avg embedding ({len(voice_embeddings)} samples → 256-dim)")
-                    else:
-                        logger.error(f" {user_id}: Failed to store embedding!")
-                        validation_issues.append(f"User {user_id}: failed to store in memory")
-                        skipped_count += 1
-                        continue
-                    
-                except Exception as e:
-                    logger.error(f"Failed to process embeddings for user {user_id}: {str(e)}")
-                    validation_issues.append(f"User {user_id}: processing error - {str(e)}")
-                    skipped_count += 1
-                    continue
-                
-            except Exception as e:
-                logger.warning(f"Error syncing user {user.get('user_id', 'unknown')}: {str(e)}")
-                validation_issues.append(f"User {user.get('user_id', 'unknown')}: {str(e)}")
-                skipped_count += 1
-                continue
-        
-        # Save the updated embeddings to disk
-        try:
-            logger.info(f"[PERSIST] Saving {len(speaker_service.speaker_embeddings)} embeddings to disk...")
-            speaker_service._save_embeddings()
-            logger.info(f"[PERSIST]  Successfully persisted {len(speaker_service.speaker_embeddings)} embeddings")
-        except Exception as e:
-            logger.error(f"[PERSIST]  Failed to save embeddings to disk: {str(e)}")
-            validation_issues.append(f"Disk save failed: {str(e)}")
-            # Don't fail the sync if save fails, as embeddings are in memory
-        
-        # Final confirmation
-        final_count = len(speaker_service.speaker_embeddings)
-        logger.info("="*70)
-        logger.info(f" SPEAKER SYNC COMPLETE: {final_count} embeddings ready for verification")
-        logger.info("="*70)
-        
-        return {
-            "success": True,
-            "message": f"Synced {synced_count} speakers from Central Server",
-            "speakers_synced": synced_count,
-            "speakers_skipped": skipped_count,
-            "validation_issues": validation_issues if validation_issues else None,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-    except Exception as e:
-        logger.error(f"Unexpected error during speaker sync: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail={"code": "SPEAKER_SYNC_FAILED", "message": "Speaker synchronization failed"},
-        ) from e
 
 
 @router.get(
@@ -949,9 +789,9 @@ async def verify_speaker(file: UploadFile = File(...)):
         # Save uploaded file temporarily
         temp_fd, temp_file_path = tempfile.mkstemp(suffix=".wav")
         try:
-            content = await file.read()
-            os.write(temp_fd, content)
-            os.close(temp_fd)
+            with os.fdopen(temp_fd, "wb") as upload:
+                content = await file.read()
+                upload.write(content)
         except Exception as e:
             if os.path.exists(temp_file_path):
                 os.unlink(temp_file_path)
@@ -1095,9 +935,9 @@ async def process_voice_file(file: UploadFile = File(...)):
         # Save uploaded file temporarily
         temp_fd, temp_file_path = tempfile.mkstemp(suffix=".wav")
         try:
-            content = await file.read()
-            os.write(temp_fd, content)
-            os.close(temp_fd)
+            with os.fdopen(temp_fd, "wb") as upload:
+                content = await file.read()
+                upload.write(content)
         except Exception as e:
             if os.path.exists(temp_file_path):
                 os.unlink(temp_file_path)
@@ -1130,120 +970,6 @@ async def process_voice_file(file: UploadFile = File(...)):
             },
             "error": None,
         }
-        
-        # Initialize speaker service encoder
-        try:
-            get_speaker_service().initialize_encoder()
-        except Exception as e:
-            logger.error(f"Failed to initialize speaker encoder: {str(e)}", exc_info=True)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Voice encoder initialization failed: {str(e)}"
-            )
-        
-        # Load and validate audio
-        try:
-            audio_data, sample_rate = load_audio_file(temp_file_path)
-        except Exception as e:
-            logger.error(f"Failed to load audio file: {str(e)}")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Failed to load audio file. Ensure it's a valid WAV or MP3 file."
-            )
-        
-        # Validate audio duration
-        if not validate_audio_duration(
-            audio_data,
-            sample_rate,
-            min_duration=0.5  # At least 0.5 seconds of audio
-        ):
-            logger.warning(f"Audio file too short: {file.filename}")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Audio is too short. Please provide at least 0.5 seconds of speech."
-            )
-        
-        # Preprocess audio for Resemblyzer
-        if not RESEMBLYZER_AVAILABLE:
-            logger.error("Resemblyzer not available")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Voice processing unavailable - Resemblyzer failed to load at startup"
-            )
-        
-        try:
-            # Resemblyzer expects audio at 16kHz
-            preprocessed_audio = preprocess_wav(audio_data, source_sr=sample_rate)
-        except Exception as e:
-            logger.error(f"Failed to preprocess audio: {str(e)}")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Failed to preprocess audio. Ensure it contains clear speech."
-            )
-        
-        # Check if preprocessed audio is valid (not empty)
-        if preprocessed_audio is None or len(preprocessed_audio) == 0:
-            logger.warning(f"Preprocessed audio is empty: {file.filename}")
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No clear voice detected in the audio. Please provide clearer speech."
-            )
-        
-        # Generate embedding
-        try:
-            embedding = get_speaker_service().encoder.embed_utterance(preprocessed_audio)
-        except Exception as e:
-            logger.error(f"Failed to generate embedding: {str(e)}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to extract voice embedding"
-            )
-        
-        # Validate embedding
-        if embedding is None or len(embedding) == 0:
-            logger.error(f"Generated embedding is invalid: {file.filename}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to generate valid voice embedding"
-            )
-        
-        # Convert numpy array to list for JSON serialization
-        embedding_list = embedding.tolist() if hasattr(embedding, 'tolist') else list(embedding)
-        
-        # Estimate quality score based on preprocessed audio characteristics
-        # This is a heuristic: scale by audio intensity/RMS
-        import numpy as np
-        audio_rms = np.sqrt(np.mean(preprocessed_audio ** 2))
-        # Normalize to 0-1 range (RMS typically 0.0-0.3 for speech)
-        quality_score = min(1.0, max(0.0, audio_rms / 0.2))
-        
-        # Return response in APIResponse format: {"success": true, "data": {...}, "error": null}
-        # This is compatible with AudioClient parsing which expects result.get("success")
-        response_data = {
-            "embedding": embedding_list,
-            "embedding_size": len(embedding_list),
-            "quality_score": round(float(quality_score), 3),
-            "voice_detected": True,
-            "audio_file": file.filename,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        logger.info(
-            f"Voice embedding extracted successfully: "
-            f"size={len(embedding_list)}, quality={quality_score:.3f}, file={file.filename}"
-        )
-        
-        # Return as plain dict (not Pydantic object) for maximum compatibility
-        # FastAPI will serialize this to JSON automatically
-        response = {
-            "success": True,
-            "data": response_data,
-            "error": None
-        }
-        
-        logger.info(f"[/process-voice] Returning response: success={response['success']}, data keys={list(response['data'].keys())}")
-        
-        return response
         
     except HTTPException:
         raise
@@ -1307,9 +1033,9 @@ async def transcribe_audio(file: UploadFile = File(...), language: str = "auto")
         # Save uploaded file temporarily
         temp_fd, temp_file_path = tempfile.mkstemp(suffix=".wav")
         try:
-            content = await file.read()
-            os.write(temp_fd, content)
-            os.close(temp_fd)
+            with os.fdopen(temp_fd, "wb") as upload:
+                content = await file.read()
+                upload.write(content)
         except Exception as e:
             if os.path.exists(temp_file_path):
                 os.unlink(temp_file_path)

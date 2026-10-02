@@ -272,9 +272,8 @@ class EnrollmentService:
             await self.storage.save_enrollment_smart(user_id, enrollment_record)
             print(f"[Enrollment] [OK] Enrollment data stored securely")
             
-            # Stage 8: Cleanup
+            # Stage 8: Cleanup is guaranteed by finally, including cancellation.
             progress.update_stage('cleanup')
-            self._cleanup_files(photo_paths + voice_paths)
             
             # Stage 9: Completed
             progress.update_stage('completed')
@@ -304,18 +303,18 @@ class EnrollmentService:
             
         except HTTPException:
             progress.set_error("Enrollment failed")
-            self._cleanup_files(photo_paths + voice_paths)
             raise
             
         except Exception as e:
             progress.set_error("Enrollment failed")
-            self._cleanup_files(photo_paths + voice_paths)
             print(f"[Enrollment]  ERROR: {type(e).__name__}: {str(e)}")
             # Don't expose internal error details to client
             raise HTTPException(
                 status_code=500,
                 detail="Enrollment failed. Please try again or contact support."
             )
+        finally:
+            self._cleanup_files(photo_paths + voice_paths)
     
     
     async def improve_training(
@@ -421,14 +420,10 @@ class EnrollmentService:
                         "audio": existing_data["sample_count"]["audio"] - 5
                     }
                 })
-                self._cleanup_files(photo_paths + voice_paths)
                 raise HTTPException(
                     status_code=500,
                     detail=f"Failed to update Central Server with new embeddings: {str(cs_error)}"
                 )
-            
-            self._cleanup_files(photo_paths + voice_paths)
-            
             print(f"[ImproveTraining] [OK] Training improved for user {user_id}")
             
             return {
@@ -442,15 +437,15 @@ class EnrollmentService:
             }
             
         except HTTPException:
-            self._cleanup_files(photo_paths + voice_paths)
             raise
         except Exception as e:
-            self._cleanup_files(photo_paths + voice_paths)
             error_msg: str = str(e) if str(e) else f"{type(e).__name__}: Unknown error"
             print(f"[ImproveTraining]  ERROR: {error_msg}")
             import traceback
             print(f"[ImproveTraining] Traceback: {traceback.format_exc()}")
             raise HTTPException(status_code=500, detail=f"Improve training failed: {error_msg}")
+        finally:
+            self._cleanup_files(photo_paths + voice_paths)
     
     async def update_model(
         self,
@@ -561,14 +556,10 @@ class EnrollmentService:
                 # We saved the new data, so we need to revert but we don't have the old state here
                 # So we'll clear it and let user re-enroll
                 self.storage.delete_enrollment(actual_user_id)
-                self._cleanup_files(photo_paths + voice_paths)
                 raise HTTPException(
                     status_code=500,
                     detail=f"Failed to update Central Server with new embeddings: {str(cs_error)}"
                 )
-            
-            self._cleanup_files(photo_paths + voice_paths)
-            
             print(f"[ReEnrollment] [OK] Re-enrollment completed for user {user_id}")
             
             return {
@@ -582,15 +573,15 @@ class EnrollmentService:
             }
             
         except HTTPException:
-            self._cleanup_files(photo_paths + voice_paths)
             raise
         except Exception as e:
-            self._cleanup_files(photo_paths + voice_paths)
             print(f"[ReEnrollment]  ERROR: {type(e).__name__}: {str(e)}")
             raise HTTPException(
                 status_code=500,
                 detail="Re-enrollment failed. Please try again or contact support."
             )
+        finally:
+            self._cleanup_files(photo_paths + voice_paths)
     
     async def get_enrollment_data(self, user_id: str) -> Optional[Dict]:
         """Retrieve enrollment data from secure storage (async)"""

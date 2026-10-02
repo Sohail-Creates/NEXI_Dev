@@ -2,6 +2,11 @@ import numpy as np
 import pytest
 import sys
 from pathlib import Path
+import asyncio
+import os
+import tempfile
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "03_audio_service"))
 
@@ -17,6 +22,40 @@ def vector(index=0):
     result = np.zeros(256, dtype=float)
     result[index] = 1.0
     return result.tolist()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["process_voice_file", "verify_speaker", "transcribe_audio"])
+@pytest.mark.parametrize("failure", [OSError("upload read failed"), asyncio.CancelledError()])
+async def test_audio_upload_read_failure_closes_descriptor_and_removes_file(monkeypatch, tmp_path, operation, failure):
+    from audio_service.routes import advanced_routes
+    from fastapi import HTTPException
+
+    created = []
+    real_mkstemp = tempfile.mkstemp
+
+    def create(*args, **kwargs):
+        descriptor, path = real_mkstemp(suffix=".wav", dir=tmp_path)
+        created.append((descriptor, path))
+        return descriptor, path
+
+    monkeypatch.setattr(tempfile, "mkstemp", create)
+    upload = SimpleNamespace(filename="voice.wav", read=AsyncMock(side_effect=failure))
+    try:
+        with pytest.raises((HTTPException, asyncio.CancelledError)):
+            await getattr(advanced_routes, operation)(upload)
+        descriptor, path = created[0]
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
+        assert not Path(path).exists()
+    finally:
+        # Keep the deliberately failing pre-fix reproduction disposable too.
+        for descriptor, path in created:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+            Path(path).unlink(missing_ok=True)
 
 
 def test_canonical_and_legacy_embedding_shapes_normalize():
