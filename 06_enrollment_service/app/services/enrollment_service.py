@@ -3,18 +3,23 @@ from shared.security import internal_service_headers
 from config.ssl_config import client_verify
 import asyncio
 import httpx
+import logging
 from datetime import datetime
 from typing import Dict, Optional, List, Tuple
 from fastapi import UploadFile, HTTPException
 from ..utils.storage_adapter import StorageAdapter
 from app.utils.file_handler import save_uploaded_file, ALLOWED_IMAGE_TYPES, ALLOWED_AUDIO_TYPES
 from app.clients.vision_client import VisionClient
+from app.services.photo_validation import PhotoValidation, validation_result
 from app.clients.audio_client import AudioClient
 from app.clients.central_server_client import CentralServerClient
 from app.utils.storage_adapter import get_storage_adapter
 from app.utils.progress_tracker import EnrollmentProgress
 from app.utils.validators import EnrollmentValidator, ValidationError, ErrorFormatter
 from config.settings import settings
+
+
+logger = logging.getLogger(__name__)
 
 
 class EnrollmentService:
@@ -25,6 +30,7 @@ class EnrollmentService:
         
         # Initialize service clients
         self.vision_client = VisionClient()
+        self.photo_validation = PhotoValidation(self.vision_client)
         self.audio_client = AudioClient()
         self.central_server_client = CentralServerClient()
         
@@ -40,6 +46,27 @@ class EnrollmentService:
             "audio_service": await self.audio_client.check_health(),
             "central_server": await self.central_server_client.check_health()
         }
+
+    async def validate_photo(self, photo: UploadFile) -> Dict:
+        """Use the final-enrollment check; return safe metadata, never the vector."""
+        path = None
+        try:
+            await EnrollmentValidator.validate_photo_file(photo, 1)
+            path = await save_uploaded_file(photo, self.upload_dir, ALLOWED_IMAGE_TYPES, self.max_photo_size)
+            face = await self.photo_validation.get_face_embedding(path)
+            return validation_result(valid=True, confidence=face["confidence"])
+        except ValidationError as exc:
+            raise HTTPException(status_code=exc.status_code, detail={
+                **validation_result(valid=False, reason="INVALID_IMAGE"), "message": exc.message}) from exc
+        except HTTPException as exc:
+            logger.exception("Photo prevalidation failed: %s", ErrorFormatter.error_message(exc))
+            if not isinstance(exc.detail, dict):
+                from app.clients.vision_client import photo_error
+                raise photo_error(exc.status_code, "INVALID_IMAGE", ErrorFormatter.error_message(exc)) from exc
+            raise
+        finally:
+            if path and os.path.exists(path):
+                os.remove(path)
     
     async def process_enrollment(
         self, 
@@ -112,12 +139,12 @@ class EnrollmentService:
                         self.max_photo_size
                     )
                     photo_paths.append(photo_path)
-                    print(f"[Enrollment]   [OK] Photo {i+1}/5 saved: {photo_path}")
+                    logger.info("enrollment_photo_saved", extra={"photo_index": i + 1})
                 except Exception as e:
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Photo {i+1} validation failed: {str(e)}"
-                    )
+                        detail=f"Photo {i+1} validation failed: {ErrorFormatter.error_message(e)}"
+                    ) from e
             
             # Save all voice samples
             for i, voice in enumerate(voice_samples):
@@ -146,15 +173,16 @@ class EnrollmentService:
             
             for i, photo_path in enumerate(photo_paths):
                 try:
-                    face_data = await self.vision_client.get_face_embedding(photo_path)
+                    face_data = await self.photo_validation.get_face_embedding(photo_path)
                     face_embeddings.append(face_data["embedding"])
                     face_confidences.append(face_data["confidence"])
                     print(f"[Enrollment]   [OK] Photo {i+1}/5 processed (confidence: {face_data['confidence']:.3f})")
                 except Exception as e:
+                    logger.exception("Enrollment face processing failed for photo %d", i + 1)
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Failed to process photo {i+1}: {str(e)}"
-                    )
+                        detail=f"Failed to process photo {i+1}: {ErrorFormatter.error_message(e)}"
+                    ) from e
             
             avg_face_confidence: float = sum(face_confidences) / len(face_confidences)
             print(f"[Enrollment] [OK] Face embeddings completed (avg confidence: {avg_face_confidence:.3f})")
@@ -349,7 +377,7 @@ class EnrollmentService:
             new_face_embeddings = []
             new_face_confidences = []
             for i, photo_path in enumerate(photo_paths):
-                face_data = await self.vision_client.get_face_embedding(photo_path)
+                face_data = await self.photo_validation.get_face_embedding(photo_path)
                 new_face_embeddings.append(face_data["embedding"])
                 new_face_confidences.append(face_data["confidence"])
                 print(f"[ImproveTraining]   [OK] Photo {i+1}/5 processed")
@@ -483,7 +511,7 @@ class EnrollmentService:
             new_face_embeddings = []
             new_face_confidences = []
             for i, photo_path in enumerate(photo_paths):
-                face_data = await self.vision_client.get_face_embedding(photo_path)
+                face_data = await self.photo_validation.get_face_embedding(photo_path)
                 new_face_embeddings.append(face_data["embedding"])
                 new_face_confidences.append(face_data["confidence"])
                 print(f"[ReEnrollment]   [OK] Photo {i+1}/5 processed")
@@ -814,6 +842,9 @@ class EnrollmentService:
     
     def _cleanup_files(self, file_paths: list) -> None:
         """Delete temporary files"""
+        processor = getattr(self, "photo_validation", None)
+        if processor is not None:
+            processor.clear()
         for path in file_paths:
             if path and os.path.exists(path):
                 try:

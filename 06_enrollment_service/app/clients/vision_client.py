@@ -4,10 +4,19 @@ from typing import Optional, Dict
 from fastapi import HTTPException
 import logging
 import asyncio
+import math
 from shared.security import internal_service_headers
 from config.ssl_config import client_verify
+from app.utils.validators import ErrorFormatter
 
 logger = logging.getLogger(__name__)
+
+
+def photo_error(status: int, reason: str, message: str) -> HTTPException:
+    # Lazy import avoids a client/service import cycle; one metadata shape.
+    from app.services.photo_validation import validation_result
+    return HTTPException(status_code=status, detail={
+        **validation_result(valid=False, reason=reason), "code": reason, "message": message})
 
 class VisionClient:
     """Client for communicating with Vision Service with timeout & retry"""
@@ -42,8 +51,8 @@ class VisionClient:
         """
         # Validate file exists
         if not os.path.exists(image_path):
-            logger.error(f"Image file not found: {image_path}")
-            raise HTTPException(status_code=400, detail="Image file not found on server")
+            logger.error("photo_validation", extra={"reason": "INVALID_IMAGE", "result": "failed"})
+            raise photo_error(400, "INVALID_IMAGE", "Image file not found on server")
         
         # Retry logic
         last_error = None
@@ -59,32 +68,48 @@ class VisionClient:
                         )
                     
                     if response.status_code != 200:
-                        last_error = f"HTTP {response.status_code}"
-                        if attempt < self.max_retries - 1:
+                        try:
+                            detail = response.json()
+                        except ValueError:
+                            detail = response.text
+                        last_error = f"HTTP {response.status_code}: {ErrorFormatter.error_message(detail)}"
+                        if response.status_code >= 500 and attempt < self.max_retries - 1:
                             wait_time = 2 ** attempt
                             logger.warning(f"Vision Service error, retrying in {wait_time}s")
                             await asyncio.sleep(wait_time)
                             continue
-                        logger.error(f"Vision Service returned {response.status_code}")
-                        raise HTTPException(status_code=503, detail="Vision Service error")
+                        logger.error("Vision Service returned %s", last_error)
+                        # Never forward arbitrary upstream exception text/paths.
+                        if response.status_code in (400, 413, 415, 422):
+                            raise photo_error(response.status_code, "INVALID_IMAGE", "Invalid image file, format or size")
+                        if "FACE_MODEL_UNAVAILABLE" in str(detail) or "MODEL_NOT_READY" in str(detail):
+                            raise photo_error(503, "MODEL_NOT_READY", "Face model is not ready")
+                        raise photo_error(503, "INFERENCE_ERROR", "Face inference failed; check server logs")
                     
                     result = response.json()
                     
                     # Validate response structure
                     if not isinstance(result, dict):
                         logger.error(f"Invalid Vision Service response format: {type(result)}")
-                        raise HTTPException(status_code=503, detail="Invalid response format")
+                        raise photo_error(503, "REQUEST_FAILURE", "Invalid response from Vision Service")
                     
                     # Vision's authoritative response is a collection; enrollment
                     # consumes the first detected face from the uploaded sample.
                     faces = result.get("faces")
-                    if not isinstance(faces, list) or not faces:
-                        raise HTTPException(status_code=400, detail="No face detected in image")
+                    if not isinstance(faces, list):
+                        raise photo_error(503, "REQUEST_FAILURE", "Invalid face response from Vision Service")
+                    if not faces:
+                        raise photo_error(400, "NO_FACE_DETECTED", "No face detected in image")
 
                     face = faces[0]
                     if not isinstance(face, dict) or not face.get("embedding"):
                         logger.error("Vision Service didn't return face embedding")
-                        raise HTTPException(status_code=503, detail="Failed to extract face data")
+                        raise photo_error(503, "INFERENCE_ERROR", "Failed to extract face data")
+                    vector = face["embedding"]
+                    if (not isinstance(vector, list) or
+                        not all(isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) for value in vector) or
+                        not any(value != 0 for value in vector)):
+                        raise photo_error(503, "INFERENCE_ERROR", "Vision returned an invalid face embedding")
                     
                     return {
                         "embedding": face["embedding"],
@@ -92,32 +117,33 @@ class VisionClient:
                         "face_detected": True
                     }
                     
-            except httpx.TimeoutException:
-                last_error = "Timeout"
+            except httpx.TimeoutException as e:
+                last_error = ErrorFormatter.error_message(e)
                 if attempt < self.max_retries - 1:
                     wait_time = 2 ** attempt
                     logger.warning(f"Vision Service timeout, retrying in {wait_time}s")
                     await asyncio.sleep(wait_time)
                     continue
-                logger.error("Vision Service timeout")
-                raise HTTPException(status_code=503, detail="Vision Service timeout")
+                logger.exception("Vision Service timeout: %s", type(e).__name__)
+                raise photo_error(503, "REQUEST_FAILURE", "Vision Service timed out; try again") from e
                 
             except httpx.RequestError as e:
-                last_error = str(e)
+                last_error = ErrorFormatter.error_message(e)
                 if attempt < self.max_retries - 1:
                     wait_time = 2 ** attempt
                     logger.warning(f"Vision Service connection error, retrying in {wait_time}s")
                     await asyncio.sleep(wait_time)
                     continue
-                logger.error(f"Vision Service connection error: {str(e)}")
-                raise HTTPException(status_code=503, detail="Cannot reach Vision Service")
+                logger.exception("Vision Service connection error: %s", last_error)
+                raise photo_error(503, "REQUEST_FAILURE", "Cannot reach Vision Service; check service readiness") from e
                 
             except HTTPException:
                 raise
             except Exception as e:
-                logger.error(f"Vision Service error: {type(e).__name__}: {str(e)}")
-                raise HTTPException(status_code=503, detail=f"Vision Service error: {str(e)}")
+                message = ErrorFormatter.error_message(e)
+                logger.exception("Vision Service error: %s: %s", type(e).__name__, message)
+                raise photo_error(503, "INFERENCE_ERROR", "Face inference failed; check server logs") from e
         
         # All retries exhausted
         logger.error(f"Vision Service failed after {self.max_retries} attempts: {last_error}")
-        raise HTTPException(status_code=503, detail=f"Vision Service unavailable: {last_error}")
+        raise photo_error(503, "REQUEST_FAILURE", "Vision Service unavailable")

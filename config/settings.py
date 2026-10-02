@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     # ENROLLMENT SERVICE (see config/ports.py)
     enrollment_service_port: int = ServicePorts.ENROLLMENT_SERVICE
     enrollment_service_url: str = ServicePorts.get_base_url("enrollment")
+    photo_validation_cache_ttl_seconds: float = 600.0
+    photo_validation_cache_max_items: int = 128
+    # Bump when deployed face model, detector, preprocessing or validity policy changes.
+    photo_validation_version: str = "opencv-facenet-validation-v1"
+    photo_validation_concurrency: int = 2
 
     # VISION SERVICE (see config/ports.py)
     vision_service_port: int = ServicePorts.VISION_SERVICE

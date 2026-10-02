@@ -71,6 +71,7 @@ app.add_middleware(
 app.add_middleware(
     UploadGuardMiddleware,
     rules={
+        "/enrollment/validate-photo": (enrollment.enrollment_service.max_photo_size * 2, ("multipart/form-data",)),
         "/enrollment/enroll": (76 * 1024 * 1024, ("multipart/form-data",)),
         "/enrollment/improve-training": (76 * 1024 * 1024, ("multipart/form-data",)),
         "/enrollment/update-model": (76 * 1024 * 1024, ("multipart/form-data",)),

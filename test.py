@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 import json
 import os
@@ -15,7 +15,7 @@ import sys
 import tempfile
 import threading
 import time
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import quote
 from uuid import uuid4
 import wave
@@ -352,6 +352,7 @@ class LiveRESTClient:
         data: Mapping[str, Any] | None = None,
         files: Any | None = None,
         display: bool = True,
+        quiet: bool = False,
     ) -> LiveResponse:
         url = f"{self.urls.by_name(service)}{path}"
         if not url.lower().startswith("https://"):
@@ -381,7 +382,7 @@ class LiveRESTClient:
                 {"field": field_name, "filename": value[0]}
                 for field_name, value in iterable
             ]
-        if self.output_mode == "debug":
+        if self.output_mode == "debug" and not quiet:
             print("\nREQUEST")
             print(_print_json(request_summary))
 
@@ -423,6 +424,8 @@ class LiveRESTClient:
 
                 response = asyncio.run(send())
         except Exception as exc:
+            if quiet:
+                raise
             elapsed_ms = (time.perf_counter() - started_at) * 1000
             if isinstance(exc, ManualRequestCancelled):
                 if self.output_mode == "trace":
@@ -439,6 +442,8 @@ class LiveRESTClient:
                 self._report_failure(service, method, path, 0, "TRANSPORT_ERROR", str(exc), elapsed_ms)
             raise
         result = self._live_response(response)
+        if quiet:
+            return result
         elapsed_ms = (time.perf_counter() - started_at) * 1000
         if self.output_mode == "debug":
             print("RESPONSE")
@@ -555,11 +560,12 @@ class LiveRESTClient:
         data: Mapping[str, Any] | None = None,
         files: Any | None = None,
         display: bool = True,
+        quiet: bool = False,
     ) -> LiveResponse:
         return self._request(
             service, method, path, cancel_event=cancel_event, internal=internal,
             bearer=bearer, params=params, json_body=json_body, data=data,
-            files=files, display=display,
+            files=files, display=display, quiet=quiet,
         )
 
     @staticmethod
@@ -595,12 +601,13 @@ class LiveRESTClient:
         data: Mapping[str, Any] | None = None,
         files: Any | None = None,
         display: bool = True,
+        quiet: bool = False,
     ) -> LiveResponse:
         """Use the shared request path, optionally aborting the HTTP task on SPACE."""
         return self._request(
             service, method, path, cancel_event=cancel_event, internal=internal,
             bearer=bearer, params=params, json_body=json_body, data=data,
-            files=files, display=display,
+            files=files, display=display, quiet=quiet,
         )
 
 
@@ -641,7 +648,11 @@ def _prompt_files(label: str, count: int) -> list[Path]:
     return [_existing_file(input(f"  {label} {index + 1}: ").strip(), label) for index in range(count)]
 
 
-def _capture_face_samples(output_dir: Path, count: int = 5) -> list[Path]:
+def _capture_face_samples(
+    output_dir: Path, count: int = 5, *, photo_numbers: list[int] | None = None,
+    on_capture: Callable[[int, Path], None] | None = None,
+    guidance: Mapping[int, str] | None = None,
+) -> list[Path]:
     """Capture enrollment photos locally; Vision still owns all face processing."""
     try:
         import cv2
@@ -661,19 +672,22 @@ def _capture_face_samples(output_dir: Path, count: int = 5) -> list[Path]:
         camera.release()
         raise RuntimeError(f"Cannot open camera device {device_index}")
 
-    prompts = ("front", "slightly left", "slightly right", "slightly up", "slightly down")
+    prompts = ("front", "small left; eyes visible", "small right; eyes visible", "slightly up", "slightly down")
+    numbers = photo_numbers if photo_numbers is not None else list(range(1, count + 1))
     captured: list[Path] = []
     window_name = "NEXI enrollment - SPACE capture, ESC cancel"
     try:
-        while len(captured) < count:
+        while len(captured) < len(numbers):
             ok, frame = camera.read()
             if not ok or frame is None:
                 raise RuntimeError("Camera stopped returning frames")
             preview = frame.copy()
-            direction = prompts[len(captured)] if len(captured) < len(prompts) else "new angle"
+            number = numbers[len(captured)]
+            direction = prompts[number - 1] if 1 <= number <= len(prompts) else "new angle"
+            direction = (guidance or {}).get(number, direction)
             cv2.putText(
                 preview,
-                f"Photo {len(captured) + 1}/{count}: {direction} - press SPACE",
+                f"Photo {number}/{count}: {direction} - press SPACE",
                 (20, 35),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.7,
@@ -687,15 +701,104 @@ def _capture_face_samples(output_dir: Path, count: int = 5) -> list[Path]:
                 raise RuntimeError("Face capture cancelled")
             if key != 32:
                 continue
-            path = output_dir / f"face_{len(captured) + 1}.jpg"
+            version = f"-{uuid4().hex[:8]}" if on_capture is not None else ""
+            path = output_dir / f"face_{number}{version}.jpg"
             if not cv2.imwrite(str(path), frame, [cv2.IMWRITE_JPEG_QUALITY, 95]):
                 raise RuntimeError(f"Failed to save captured image: {path}")
             captured.append(path)
-            print(f"Captured photo {len(captured)}/{count}: {path.name}")
+            if on_capture is not None:
+                on_capture(number, path)
+            print(f"Captured photo {number}/{count}: {path.name}")
     finally:
         camera.release()
         cv2.destroyAllWindows()
     return captured
+
+
+def _capture_validated_face_samples(
+    console: "Sprint2Console", output_dir: Path, count: int = 5, *,
+    guidance: Mapping[int, str] | None = None,
+    timing_report: dict | None = None,
+) -> list[Path]:
+    """REST orchestration only: capture all, then retake only rejected numbers."""
+    pending = list(range(1, count + 1))
+    accepted: dict[int, Path] = {}
+    started = time.perf_counter()
+    capture_seconds = wait_seconds = 0.0
+    rounds = 0
+    from config.settings import settings
+    with ThreadPoolExecutor(max_workers=max(1, min(count, settings.photo_validation_concurrency))) as executor:
+        while pending:
+            # Round-local futures are fully drained before any retake is captured.
+            # This barrier prevents stale attempts from overwriting accepted slots.
+            futures = {}
+            paths = {}
+
+            def captured(number: int, path: Path) -> None:
+                paths[number] = path
+                futures[number] = executor.submit(console.validate_photo, path)
+
+            capture_started = time.perf_counter()
+            _capture_face_samples(output_dir, count=count, photo_numbers=pending,
+                                  on_capture=captured, guidance=guidance)
+            capture_seconds += time.perf_counter() - capture_started
+            waiting_started = time.perf_counter()
+            rounds += 1
+            failures = []
+            unavailable = []
+            for number in pending:
+                try:
+                    response = futures[number].result()
+                except Exception as exc:
+                    unavailable.append(f"Photo {number}: {str(exc).strip() or repr(exc)}")
+                    continue
+                if response.ok:
+                    accepted[number] = paths[number]
+                else:
+                    message = f"Photo {number}: {_response_message(response.body, 'Photo validation failed')}"
+                    if response.status_code >= 500:
+                        unavailable.append(message)
+                    else:
+                        failures.append((number, message))
+            if unavailable:
+                raise RuntimeError("Photo validation service failed; voice capture has not started. " + "; ".join(unavailable))
+            pending = [number for number, _ in failures]
+            if failures:
+                print("Retake only these photos before voice recording:")
+                for _, message in failures:
+                    print(f"  {message}")
+                # Diagnostic instructions for a deliberately bad initial photo
+                # must not apply to its retake.
+                guidance = None
+            wait_seconds += time.perf_counter() - waiting_started
+    total = time.perf_counter() - started
+    metrics = {"capture_seconds": capture_seconds, "validation_wait_seconds": wait_seconds,
+               "total_seconds": total, "capture_rounds": rounds}
+    if timing_report is not None:
+        timing_report.update(metrics)
+    print(f"All {count} photos validated in {total:.2f}s; capture {capture_seconds:.2f}s, remaining validation wait {wait_seconds:.2f}s.")
+    return [accepted[number] for number in range(1, count + 1)]
+
+
+@contextmanager
+def _enrollment_capture_directory(console: "Sprint2Console"):
+    evidence_dir = getattr(console, "enrollment_evidence_dir", None)
+    if evidence_dir is None:
+        with tempfile.TemporaryDirectory(prefix="nexi-enrollment-") as temporary:
+            yield Path(temporary)
+        return
+    from shared.face_diagnostics import diagnostic_directory
+    directory = diagnostic_directory(Path(evidence_dir)) / f"capture-{uuid4().hex}"
+    directory.mkdir(parents=True)
+    print(f"Enrollment evidence retained at: {directory}")
+    try:
+        yield directory
+    except Exception as exc:
+        (directory / "error.json").write_text(
+            json.dumps({"type": type(exc).__name__, "message": str(exc).strip() or repr(exc)}, indent=2),
+            encoding="utf-8",
+        )
+        raise
 
 
 def _capture_voice_samples(
@@ -781,23 +884,24 @@ def _interactive_enrollment(console: "Sprint2Console") -> LiveResponse:
         raise ValueError("Age must be a whole number") from exc
     relation = input("Relation (optional): ").strip() or None
 
-    with tempfile.TemporaryDirectory(prefix="nexi-enrollment-") as temporary:
-        capture_dir = Path(temporary)
+    with _enrollment_capture_directory(console) as capture_dir:
         print("Camera preview will open. Press SPACE once for each requested angle.")
-        photos = _capture_face_samples(capture_dir)
+        photos = _capture_validated_face_samples(console, capture_dir)
         print("Next, record five independent five-second voice samples.")
         voices = _capture_voice_samples(capture_dir)
-        return console.enroll(name, photos, voices, age=age, relation=relation)
+        response = console.enroll(name, photos, voices, age=age, relation=relation)
+        if getattr(console, "enrollment_evidence_dir", None) is not None:
+            (capture_dir / "response.json").write_text(_print_json(response.body), encoding="utf-8")
+        return response
 
 
 def _interactive_training(console: "Sprint2Console", *, replace: bool) -> LiveResponse:
     user_id = input("Enrolled user ID: ").strip()
     if not user_id:
         raise ValueError("User ID is required")
-    with tempfile.TemporaryDirectory(prefix="nexi-training-") as temporary:
-        capture_dir = Path(temporary)
+    with _enrollment_capture_directory(console) as capture_dir:
         print("Press SPACE in the camera preview for each of five photos.")
-        photos = _capture_face_samples(capture_dir)
+        photos = _capture_validated_face_samples(console, capture_dir)
         print("Record five independent five-second voice samples.")
         voices = _capture_voice_samples(capture_dir)
         if replace:
@@ -898,6 +1002,15 @@ class Sprint2Console:
         self.session = Session()
         self._playback_gate = threading.Lock()
         self._background_prompts: list[threading.Thread] = []
+        self.enrollment_evidence_dir: Path | None = None
+
+    def validate_photo(self, path: Path) -> LiveResponse:
+        with path.open("rb") as photo:
+            return self.client.request(
+                "enrollment", "POST", "/enrollment/validate-photo", internal=True,
+                files={"file": (path.name, photo, "image/jpeg")}, display=False,
+                quiet=True,
+            )
 
     def health_dashboard(self, *, announce: bool = True) -> list[LiveResponse]:
         if announce:
@@ -1660,6 +1773,9 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="Console output detail (default: NEXI_CONSOLE_OUTPUT or narrative)",
     )
+    parser.add_argument("--enrollment-evidence-dir", type=Path,
+                        default=os.getenv("NEXI_ENROLLMENT_EVIDENCE_DIR"),
+                        help="Retain enrollment captures/errors in this private ignored directory")
     return parser
 
 
@@ -1667,6 +1783,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     client = LiveRESTClient(output_mode=args.output)
     console = Sprint2Console(client)
+    console.enrollment_evidence_dir = args.enrollment_evidence_dir
     try:
         if args.health:
             responses = console.health_dashboard(announce=False)

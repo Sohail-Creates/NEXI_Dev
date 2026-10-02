@@ -344,6 +344,22 @@ class EnrollmentValidator:
 
 class ErrorFormatter:
     """Format errors for safe external response"""
+
+    @staticmethod
+    def error_message(error: Any) -> str:
+        """Preserve HTTP detail/envelopes and name exceptions with empty messages."""
+        if isinstance(error, HTTPException):
+            return ErrorFormatter.error_message(error.detail)
+        if isinstance(error, dict):
+            for key in ("message", "detail", "error"):
+                if error.get(key):
+                    return ErrorFormatter.error_message(error[key])
+        text = str(error).strip() if error is not None else ""
+        if text:
+            return text
+        if isinstance(error, BaseException):
+            return repr(error) or type(error).__name__
+        return "No error detail returned by the service"
     
     @staticmethod
     def format_validation_error(error: Exception) -> Dict[str, Any]:

@@ -1,6 +1,9 @@
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Query, Path, Request
 from shared.jwt_manager import require_user_ownership
 from shared.security import require_internal_service
+from shared.api_errors import error_response
+from starlette.responses import JSONResponse
+import json
 from typing import List, Optional
 from app.models import (
     EnrollmentResponse, 
@@ -28,6 +31,22 @@ enrollment_service = EnrollmentService(
 )
 
 user_check_service = UserCheckService()
+
+
+@router.post("/validate-photo")
+async def validate_photo(request: Request, file: UploadFile = File(...)):
+    await require_internal_service(request)
+    try:
+        return await enrollment_service.validate_photo(file)
+    except HTTPException as exc:
+        response = error_response(request, exc.status_code, exc.detail)
+        if isinstance(exc.detail, dict):
+            payload = json.loads(response.body)
+            payload["error"]["validation"] = {key: exc.detail.get(key) for key in
+                ("valid", "face_detected", "confidence", "embedding_generated", "reason")}
+            headers = {key: value for key, value in response.headers.items() if key.lower() != "content-length"}
+            return JSONResponse(payload, status_code=exc.status_code, headers=headers)
+        return response
 
 
 @router.get("/check-user", response_model=UserCheckResponse)
