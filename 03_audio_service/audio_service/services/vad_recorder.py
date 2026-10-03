@@ -65,7 +65,6 @@ class VADRecorder:
         self.silence_threshold_ms = silence_threshold_ms
         self.max_recording_seconds = max(1, max_duration_seconds)
         self.start_speech_frames = 3  # 90 ms at the 30 ms frame cadence rejects isolated blips.
-        self.minimum_speech_seconds = 1.0  # Existing speaker verification minimum.
         self.audio_buffer = []
         self.output_directory = VAD_RECORDER_CONFIG["output_directory"]
         
@@ -228,11 +227,10 @@ class VADRecorder:
                                     f"Silence threshold reached after {chunks_recorded} chunks "
                                     f"({consecutive_silence_chunks} silent chunks)"
                                 )
-                                stopped_by = (
-                                    "speech_end"
-                                    if speech_chunks * self.chunk_size / self.sample_rate >= self.minimum_speech_seconds
-                                    else "no_speech"
-                                )
+                                # Speech already passed the consecutive-frame VAD
+                                # gate. Speaker verification owns its own duration
+                                # requirement; short commands must still reach STT.
+                                stopped_by = "speech_end"
                                 break
                         elif not inside_speech_region:
                             pending_speech.clear()

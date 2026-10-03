@@ -997,6 +997,9 @@ def _capture_object_observation(console: "Sprint2Console") -> Mapping[str, Any] 
 
 def _spoken_object_label(console: "Sprint2Console") -> str | None:
     """Use Audio's existing transient capture and STT, with SPACE cancellation."""
+    # Drain queued prompts before accepting ENTER; playback already includes
+    # Audio's echo guard, as in the manual conversation capture path.
+    console._wait_for_background_prompts()
     stopper = SpaceSessionStop(lambda: console.client.request(
         "audio", "POST", "/api/v1/interrupt-playback", internal=True, display=False
     ))
@@ -1004,6 +1007,7 @@ def _spoken_object_label(console: "Sprint2Console") -> str | None:
     try:
         if not stopper.wait_for_enter("Press ENTER and say your personal object label (SPACE cancels): "):
             return None
+        print("Audio is recording. Say your personal object label now.", flush=True)
         recording = console.client.request_cancellable(
             "audio", "POST", "/api/v1/record-until-silence/audio", internal=True,
             cancel_event=stopper.requested, display=False,

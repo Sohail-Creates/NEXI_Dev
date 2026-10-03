@@ -185,8 +185,38 @@ def test_camera_exactly_one_nonperson_and_cleanup(monkeypatch, detections, captu
 def test_spoken_label_uses_audio_rest_only(monkeypatch):
     monkeypatch.setattr(console_module, "SpaceSessionStop", Keys)
     client = ManualREST()
-    assert console_module._spoken_object_label(SimpleNamespace(client=client)) == "Goodbye"
+    assert console_module._spoken_object_label(console_module.Sprint2Console(client)) == "Goodbye"
     assert [call[2] for call in client.calls] == ["/api/v1/record-until-silence/audio", "/api/v1/transcribe"]
+
+
+@pytest.mark.parametrize("enter_pressed", [True, False])
+def test_object_label_waits_for_background_playback_and_enter(monkeypatch, enter_pressed):
+    events = []
+
+    class LabelKeys(Keys):
+        def start(self):
+            assert events == ["playback_complete"]
+
+        def wait_for_enter(self, prompt):
+            events.append("enter_prompt")
+            return enter_pressed
+
+    class LabelREST(ManualREST):
+        def request_cancellable(self, *args, **kwargs):
+            assert enter_pressed
+            assert events[:2] == ["playback_complete", "enter_prompt"]
+            events.append(args[2])
+            return super().request_cancellable(*args, **kwargs)
+
+    monkeypatch.setattr(console_module, "SpaceSessionStop", LabelKeys)
+    console = console_module.Sprint2Console(LabelREST())
+    console._background_prompts = [SimpleNamespace(join=lambda: events.append("playback_complete"))]
+    label = console_module._spoken_object_label(console)
+    assert label == ("Goodbye" if enter_pressed else None)
+    assert console._background_prompts == []
+    assert events == ["playback_complete", "enter_prompt"] + (
+        ["/api/v1/record-until-silence/audio", "/api/v1/transcribe"] if enter_pressed else []
+    )
 
 
 @pytest.mark.parametrize("cancel_at", ["camera", "label"])
