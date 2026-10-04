@@ -243,10 +243,21 @@ def _fact_text(item: dict[str, Any]) -> str:
 
 def build_grounded_prompt(query: str, matches: list[dict[str, Any]]) -> tuple[str, list[str]]:
     facts = [_fact_text(item) for item in matches]
-    fact_block = "\n".join(f"- {fact}" for fact in facts)
+    fact_block = "\n".join(
+        f"- {text}" if item["type"] == "fact" else f"- [object] {text}"
+        for item, text in zip(matches, facts)
+    )
+    object_guidance = (
+        "For object records, the stored personal label is itself taught knowledge "
+        "about that object. Answer label questions from that label even if no "
+        "description exists; do not invent uses or locations. Keep the answer "
+        "concise using the stored wording. "
+        if any(item["type"] == "object" for item in matches) else ""
+    )
     prompt = (
         "Answer the question strictly and only from the facts below. "
         "Do not add outside knowledge, assumptions, or new claims. "
+        f"{object_guidance}"
         f"If these facts do not contain what is needed to answer the question, "
         f"reply with exactly this marker and nothing else: {NOT_ANSWERABLE_MARKER}\n"
         f"FACTS:\n{fact_block}\n"

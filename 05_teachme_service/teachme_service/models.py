@@ -111,6 +111,8 @@ class KnowledgeItem(BaseModel):
     created_at: datetime
     updated_at: datetime
     embedding: Optional[List[float]] = Field(None, description="Vector embedding for similarity search")
+    semantic_embedding_hash: Optional[str] = Field(None, exclude_if=lambda value: value is None)
+    semantic_embedding_version: Optional[str] = Field(None, exclude_if=lambda value: value is None)
     visual_embedding: Optional[List[float]] = Field(
         None, min_length=64, max_length=64, exclude_if=lambda value: value is None,
         description="Vision P3 object features",

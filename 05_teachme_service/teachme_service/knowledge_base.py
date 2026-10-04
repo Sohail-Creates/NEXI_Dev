@@ -26,6 +26,7 @@ from .embedding_index import EmbeddingIndex
 from .services.embedding_client import EmbeddingClient
 from .services.dedup_checker import DedupChecker
 from .services.confidence_gate import ConfidenceGate
+from shared.semantic_embeddings import OBJECT_SEMANTIC_VERSION, SEMANTIC_EMBEDDING_DIMENSION, object_semantic_hash
 
 logger = logging.getLogger(__name__)
 
@@ -118,10 +119,31 @@ class PersistentKnowledgeBase:
         data = self._store.read()
         self._storage = {key: KnowledgeItem.model_validate(record) for key, record in data['storage'].items()}
         self._baseline = data["storage"]
+        # Repair active object text vectors once; facts and visual data stay intact.
+        backfilled = False
+        for item in self._storage.values():
+            backfilled = self._refresh_object_semantic_embedding(item) or backfilled
+        if backfilled:
+            self.save_to_file()
         self._rebuild_embedding_index()
     
     async def load_from_file_async(self):
         await asyncio.to_thread(self.load_from_file)
+
+    def _refresh_object_semantic_embedding(self, item: KnowledgeItem) -> bool:
+        if item.type != LearningType.OBJECT:
+            return False
+        text_hash = object_semantic_hash(item.data.model_dump(mode="json"))
+        vector = item.embedding
+        valid = (vector is not None and len(vector) == SEMANTIC_EMBEDDING_DIMENSION
+                 and all(math.isfinite(value) for value in vector)
+                 and math.fsum(value * value for value in vector) > 0)
+        if valid and item.semantic_embedding_hash == text_hash and item.semantic_embedding_version == OBJECT_SEMANTIC_VERSION:
+            return False
+        item.embedding = self.embedding_client.embed("object", item.data)
+        item.semantic_embedding_hash = text_hash
+        item.semantic_embedding_version = OBJECT_SEMANTIC_VERSION
+        return True
     
     def _rebuild_embedding_index(self):
         """
@@ -177,17 +199,21 @@ class PersistentKnowledgeBase:
             created_at=now,
             updated_at=now,
             embedding=embedding,  # Semantic text embedding for the existing index
+            # Active learn callers already generate this via EmbeddingClient.
+            semantic_embedding_hash=object_semantic_hash(object_data.model_dump(mode="json")) if embedding is not None else None,
+            semantic_embedding_version=OBJECT_SEMANTIC_VERSION if embedding is not None else None,
             visual_embedding=object_data.visual_embedding,
             instance_prototypes=object_data.instance_prototypes,
             instance_embedding_model=object_data.instance_embedding_model,
             instance_embedding_version=object_data.instance_embedding_version,
         )
         
+        self._refresh_object_semantic_embedding(knowledge_item)
         self._storage[item_id] = knowledge_item  # Single source of truth
         
         # Add to embedding index if embedding provided
-        if embedding is not None and len(embedding) > 0:
-            self.embedding_index.add_embedding(item_id, embedding)
+        if knowledge_item.embedding is not None:
+            self.embedding_index.add_embedding(item_id, knowledge_item.embedding)
         
         # Only save if not skipped (useful for async contexts)
         if not skip_save:
@@ -253,6 +279,8 @@ class PersistentKnowledgeBase:
                 setattr(item, key, value)
         
         item.updated_at = datetime.now()
+        if self._refresh_object_semantic_embedding(item):
+            self.embedding_index.add_embedding(item_id, item.embedding)
         self.save_to_file()
         return item
     
@@ -523,6 +551,7 @@ class PersistentKnowledgeBase:
                     
                     obj_data['id'] = item_id
                     knowledge_item = KnowledgeItem(**obj_data)
+                    self._refresh_object_semantic_embedding(knowledge_item)
                     
                     self._storage[item_id] = knowledge_item  # Single source of truth
                     imported_count += 1
