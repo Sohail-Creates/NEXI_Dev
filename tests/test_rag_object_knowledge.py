@@ -38,8 +38,10 @@ class IndexedTeachMe:
     def __init__(self, knowledge):
         self.knowledge = knowledge
         self.results = []
+        self.queries = []
 
     async def search_by_embedding(self, query, k, threshold):
+        self.queries.append(query)
         self.results = [{"id": item.id, "type": item.type.value,
                          "data": item.data.model_dump(mode="json"), "similarity": similarity}
                         for item, similarity in self.knowledge.search_by_embedding(
@@ -184,3 +186,53 @@ def test_new_object_reuses_already_generated_canonical_vector(knowledge, monkeyp
     key = knowledge.learn_object(data, embedding=embedding)
     knowledge.load_from_file()
     assert knowledge._storage[key].embedding == embedding
+
+
+class CombinedGroundedLLM:
+    def __init__(self):
+        self.calls = 0
+
+    async def generate_response(self, prompt, **kwargs):
+        self.calls += 1
+        self.prompt = prompt
+        lines = prompt.split("FACTS:\n", 1)[1].split("\nQUESTION:", 1)[0].splitlines()
+        return True, {"response": ". ".join(line.removeprefix("- ").removeprefix("[object] ") for line in lines)}
+
+
+async def test_compound_fact_object_uses_same_bounded_search_and_one_llm(knowledge):
+    client, llm = IndexedTeachMe(knowledge), CombinedGroundedLLM()
+    result = await RestrictedRAGPipeline(client, llm).answer("Tell me about my hometown and my water bottle.")
+    assert result.source == "teachme_grounded"
+    assert "Layyah" in result.response and "water bottle" in result.response
+    assert client.queries == ["my hometown", "my water bottle."]
+    assert llm.calls == 1
+    assert "visual_embedding" not in llm.prompt and "instance" not in llm.prompt
+
+
+async def test_compound_two_facts_excludes_irrelevant_and_deleted(knowledge):
+    from teachme_service.models import FactData
+    data = FactData(subject="My favorite color", predicate="is", object="blue")
+    key = knowledge.learn_fact(data, embedding=knowledge.embedding_client.embed("fact", data))
+    client, llm = IndexedTeachMe(knowledge), CombinedGroundedLLM()
+    result = await RestrictedRAGPipeline(client, llm).answer("Tell me about my hometown and my favorite color.")
+    assert result.source == "teachme_grounded"
+    assert "Layyah" in result.response and "blue" in result.response
+    assert "bottle" not in llm.prompt
+    assert knowledge.forget_item(key)
+    result = await RestrictedRAGPipeline(client, llm).answer("Tell me about my hometown and my favorite color.")
+    assert result.source == "teachme_grounded"
+    assert "Layyah" in result.response and "blue" not in llm.prompt
+
+
+async def test_known_unknown_compound_only_supplies_known_context(knowledge):
+    client, llm = IndexedTeachMe(knowledge), CombinedGroundedLLM()
+    result = await RestrictedRAGPipeline(client, llm).answer("Tell me about my hometown and my spacecraft engine.")
+    assert result.source == "teachme_grounded"
+    facts = llm.prompt.split("FACTS:\n", 1)[1].split("\nQUESTION:", 1)[0]
+    assert "Layyah" in facts and "bottle" not in facts and "engine" not in facts
+
+
+def test_compound_clause_count_bounded_and_ordinary_and_preserved():
+    from restricted_rag import _retrieval_clauses, RAG_TOP_K
+    assert len(_retrieval_clauses("my A and my B and my C and my D")) <= RAG_TOP_K
+    assert _retrieval_clauses("Tell me about Trinidad and Tobago") == ["Tell me about Trinidad and Tobago"]

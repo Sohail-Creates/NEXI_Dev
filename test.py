@@ -1498,10 +1498,9 @@ class Sprint2Console:
 
     def _end_conversation_session(
         self, conversation_started: bool, rag_session_id: str | None, *, idle_end: bool = False,
-        silent: bool = False,
     ) -> None:
         """The shared manual/wake teardown; speak once before existing cleanup calls."""
-        if conversation_started and not silent:
+        if conversation_started:
             farewell_stop = SpaceSessionStop(
                 lambda: self.client.request(
                     "audio", "POST", "/api/v1/interrupt-playback", internal=True, display=False
@@ -1541,7 +1540,6 @@ class Sprint2Console:
         rag_session_id: str | None = None
         idle_timeout_seconds = None
         idle_end = False
-        transcript_stop = False
 
         def interrupt_audio() -> None:
             self.client.request(
@@ -1748,8 +1746,7 @@ class Sprint2Console:
                     if self.client.output_mode == "debug":
                         print(f"Stop-command detector invoked: result={command.body['is_stop_command']}")
                     if command.body.get("is_stop_command"):
-                        transcript_stop = True
-                        print("Stop command received; closing the session without RAG or speech playback.")
+                        print("Stop command received; playing the recorded goodbye before teardown without RAG.")
                         report_counts(turn_number, prior_counts)
                         break
 
@@ -1853,7 +1850,7 @@ class Sprint2Console:
             if stop_thread is not None:
                 stop_thread.join(timeout=1.0)
             stopper.close()
-            self._end_conversation_session(conversation_started, rag_session_id, idle_end=idle_end, silent=transcript_stop)
+            self._end_conversation_session(conversation_started, rag_session_id, idle_end=idle_end)
 
     def audio_status(self) -> tuple[LiveResponse, LiveResponse]:
         print("Audio service circuit breaker and orchestration health (not general settings):")

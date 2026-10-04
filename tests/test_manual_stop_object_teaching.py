@@ -114,10 +114,49 @@ def test_manual_stop_before_rag_and_no_speech_waits(monkeypatch, silence, normal
     assert paths.count("/api/v1/transcribe") == 1 + int(normal)
     assert paths.count("/api/v1/rag/query") == int(normal)
     assert paths.count("/speak") == int(normal)
-    assert paths.count("/api/v1/playback/start") == 1 + int(normal)  # No farewell on transcript stop.
+    assert paths.count("/api/v1/playback/start") == 2 + int(normal)  # Welcome, shared farewell, normal answer.
     assert "/api/v1/conversation/end" in paths
     assert paths[-1] == "/api/v1/rag/sessions/test-session"
     assert len(watchers[0].prompts) == 1 + int(silence)
+
+
+def test_manual_button_stop_uses_shared_farewell_once(monkeypatch):
+    keys = Keys(None)
+    monkeypatch.setattr(console_module, "SpaceSessionStop", lambda *_a, **_kw: keys)
+    monkeypatch.setattr(console_module, "_wait_for_spacebar", lambda _prompt: None)
+    client = ManualREST(normal=True)
+    original = client.request
+
+    def request(service, method, path, **kwargs):
+        response = original(service, method, path, **kwargs)
+        if path == "/api/v1/rag/query":
+            keys.requested.set()
+        return response
+
+    client.request = request
+    console = console_module.Sprint2Console(client)
+    farewells = []
+    monkeypatch.setattr(console, "_play_session_farewell", lambda: farewells.append("shared") or reply())
+    console.return_user("manual")
+    assert farewells == ["shared"]
+    paths = [call[2] for call in client.calls]
+    assert "/api/v1/conversation/end" in paths
+    assert paths[-1] == "/api/v1/rag/sessions/test-session"
+
+
+def test_farewell_failure_still_closes_audio_and_central(monkeypatch):
+    monkeypatch.setattr(console_module, "SpaceSessionStop", Keys)
+    client = ManualREST()
+    console = console_module.Sprint2Console(client)
+    console.session.token, console.session.user_id = "test-token", "test-user"
+
+    def failed_playback():
+        raise RuntimeError("Playback unavailable")
+
+    monkeypatch.setattr(console, "_play_session_farewell", failed_playback)
+    console._end_conversation_session(True, "test-session")
+    assert [call[2] for call in client.calls] == [
+        "/api/v1/conversation/end", "/api/v1/rag/sessions/test-session"]
 
 
 def observation(name="bottle", class_id=39):

@@ -321,6 +321,14 @@ def is_grounded(response: str, facts: list[str]) -> bool:
     return coverage >= 0.9 and similarity >= 0.45
 
 
+def _retrieval_clauses(query: str) -> list[str]:
+    """Bound explicit separately named topics; preserve ordinary single queries."""
+    if RAG_TOP_K <= 1:
+        return [query]
+    return re.split(r"\s+and\s+(?=(?:my|our|your|the)\b)", query,
+                    maxsplit=RAG_TOP_K - 1, flags=re.IGNORECASE)
+
+
 @dataclass(frozen=True)
 class RAGResult:
     response: str
@@ -381,18 +389,23 @@ class RestrictedRAGPipeline:
         }
         if user_id is not None:
             retrieval_args["user_id"] = user_id
-        retrieval = await self.teachme_client.search_by_embedding(**retrieval_args)
-        candidates = (retrieval or {}).get("results", [])
-        matches = [
-            item for item in candidates
-            if (
-                float(item.get("similarity", 0.0)) >= RAG_MATCH_THRESHOLD
-                or (
-                    float(item.get("similarity", 0.0)) >= RAG_CANDIDATE_THRESHOLD
-                    and _has_meaningful_overlap(retrieval_query, item)
+        candidates = []
+        accepted = {}
+        for clause in _retrieval_clauses(retrieval_query):
+            retrieval = await self.teachme_client.search_by_embedding(**{**retrieval_args, "query": clause})
+            for item in (retrieval or {}).get("results", [])[:RAG_TOP_K]:
+                candidates.append(item)
+                score = float(item.get("similarity", 0.0))
+                relevant = score >= RAG_MATCH_THRESHOLD or (
+                    score >= RAG_CANDIDATE_THRESHOLD and _has_meaningful_overlap(clause, item)
                 )
-            )
-        ]
+                logger.info("rag_candidate type=%s record_id=%s similarity=%.4f accepted=%s",
+                            item.get("type"), item.get("id"), score, relevant)
+                if relevant:
+                    key = item.get("id") or _fact_text(item)
+                    if key not in accepted or score > float(accepted[key].get("similarity", 0.0)):
+                        accepted[key] = item
+        matches = sorted(accepted.values(), key=lambda item: float(item.get("similarity", 0.0)), reverse=True)[:RAG_TOP_K]
         best_similarity = max(
             (float(item.get("similarity", 0.0)) for item in candidates),
             default=None,

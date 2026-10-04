@@ -154,7 +154,7 @@ def test_manual_and_wake_share_turn_loop_and_cached_farewell(monkeypatch):
         assert paths.count("/api/v1/verify-speaker") == 1
         assert paths.count("/api/v1/transcribe") == 1
         assert paths.count("/api/v1/rag/query") == (0 if mode == "manual" else 1)
-        assert paths.count("/api/v1/playback/start") == (1 if mode == "manual" else 2)
+        assert paths.count("/api/v1/playback/start") == 2  # Opening + shared farewell in both modes.
         assert paths.index("/api/v1/playback/start") < paths.index("/api/v1/record-until-silence/audio")
         assert "/speak" not in paths
         assert paths.index("/api/v1/playback/start") < paths.index("/api/v1/conversation/end")
@@ -229,4 +229,4 @@ def test_manual_two_turns_reuse_verification_and_keep_grounded_tts(monkeypatch):
     assert paths.count("/api/v1/transcribe") == 2
     assert paths.count("/api/v1/rag/query") == 1
     assert paths.count("/speak") == 1  # grounded answer, not farewell
-    assert paths.count("/api/v1/playback/start") == 2  # opening, answer; silent stop
+    assert paths.count("/api/v1/playback/start") == 3  # Opening, answer, shared farewell.
