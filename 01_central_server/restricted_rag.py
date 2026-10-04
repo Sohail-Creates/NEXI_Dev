@@ -35,6 +35,7 @@ RAG_CANDIDATE_THRESHOLD = float(os.getenv("RAG_CANDIDATE_THRESHOLD", "0.45"))
 RAG_BAND_QUERY_COVERAGE_RATIO = float(os.getenv("RAG_BAND_QUERY_COVERAGE_RATIO", "1.0"))
 RAG_TOP_K = int(os.getenv("RAG_TOP_K", "3"))
 NOT_ANSWERABLE_MARKER = "[[NEXI_NOT_ANSWERABLE]]"
+PARTIAL_KNOWLEDGE_NOTICE = "The other requested information is not learned yet."
 RAG_FILLER_PHRASES = tuple(
     phrase.strip().casefold()
     for phrase in os.getenv(
@@ -242,10 +243,21 @@ def _fact_text(item: dict[str, Any]) -> str:
 
 
 def build_grounded_prompt(query: str, matches: list[dict[str, Any]]) -> tuple[str, list[str]]:
-    facts = [_fact_text(item) for item in matches]
+    # Presentation order follows the question, not candidate score order. This
+    # does not alter retrieval, acceptance, or the supplied knowledge records.
+    ordered_matches = matches
+    if len(matches) > 1:
+        query_terms = _retrieval_terms(query)
+
+        def topic_position(item: dict[str, Any]) -> int:
+            terms = set(_retrieval_terms(_fact_text(item)))
+            return next((index for index, term in enumerate(query_terms) if term in terms), len(query_terms))
+
+        ordered_matches = sorted(matches, key=topic_position)
+    facts = [_fact_text(item) for item in ordered_matches]
     fact_block = "\n".join(
         f"- {text}" if item["type"] == "fact" else f"- [object] {text}"
-        for item, text in zip(matches, facts)
+        for item, text in zip(ordered_matches, facts)
     )
     object_guidance = (
         "For object records, the stored personal label is itself taught knowledge "
@@ -254,15 +266,46 @@ def build_grounded_prompt(query: str, matches: list[dict[str, Any]]) -> tuple[st
         "concise using the stored wording. "
         if any(item["type"] == "object" for item in matches) else ""
     )
-    prompt = (
+    compound = len(_retrieval_clauses(normalize_retrieval_query(query))) > 1
+    compose = len(matches) > 1 or compound
+    introduction = (
+        "This is a wording task, not an open-ended knowledge question. Rewrite "
+        "the supplied statements as one concise natural sentence, or at most two "
+        "short sentences, and connect them smoothly with a conjunction. Change "
+        "first-person pronouns to address the user. Preserve the supplied order "
+        "and meaningful phrases, names, descriptions, and claims. Do not infer "
+        "possession or add words expressing new properties. Do not summarize, "
+        "list records, or show headings, record types, IDs, scores, or metadata. "
+        "Use only supplied knowledge; do not invent missing details. Return only "
+        "the natural response. "
+        if compose else
         "Answer the question strictly and only from the facts below. "
-        "Do not add outside knowledge, assumptions, or new claims. "
-        f"{object_guidance}"
-        f"If these facts do not contain what is needed to answer the question, "
+        "Do not add outside knowledge, assumptions, or new claims. " + object_guidance
+    )
+    answerability_guidance = (
+        "If only part of the question is answered by the supplied knowledge, "
+        "state only that known part in one short sentence, then append exactly: "
+        f"{PARTIAL_KNOWLEDGE_NOTICE} Do not guess the missing information. "
+        "If all requested parts are known, do not append that notice. "
+        "If none of the supplied knowledge answers any part of the question, "
+        if compound else "If these facts do not contain what is needed to answer the question, "
+    )
+    prompt = (
+        f"{introduction}"
+        f"{answerability_guidance}"
         f"reply with exactly this marker and nothing else: {NOT_ANSWERABLE_MARKER}\n"
         f"FACTS:\n{fact_block}\n"
         f"QUESTION:\n{query}"
     )
+    if compose:
+        prompt += (
+            "\nFINAL WORDING RULE: Output only the supplied known clauses, retaining "
+            "their wording apart from first-person to second-person correction and "
+            "natural conjunctions. Retain demonstrative statements instead of "
+            "inferring ownership. Never repeat or name an unknown topic from the "
+            "question in the answer; use only the exact missing-information notice "
+            "above for the unknown portion."
+        )
     return prompt, facts
 
 
@@ -440,7 +483,16 @@ class RestrictedRAGPipeline:
                 retrieval_terms=retrieval_terms,
                 best_similarity=best_similarity,
             )
-        if not is_grounded(response, facts):
+        # A fixed missing-knowledge notice is presentation, not a factual claim.
+        # Only its exact compound-answer suffix is exempt; factual validation
+        # and all relevance/grounding thresholds remain unchanged.
+        grounded_content = response
+        if len(_retrieval_clauses(retrieval_query)) > 1:
+            grounded_content = re.sub(
+                rf"(?:,\s+and\s+|\s+)(?i:{re.escape(PARTIAL_KNOWLEDGE_NOTICE)})\s*$",
+                "", response,
+            )
+        if not is_grounded(grounded_content, facts):
             logger.warning("grounding_validation_failed query=%r", query)
             return RAGResult(
                 response=TEACH_ME_RESPONSE,
