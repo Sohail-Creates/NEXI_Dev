@@ -36,6 +36,11 @@ RAG_BAND_QUERY_COVERAGE_RATIO = float(os.getenv("RAG_BAND_QUERY_COVERAGE_RATIO",
 RAG_TOP_K = int(os.getenv("RAG_TOP_K", "3"))
 NOT_ANSWERABLE_MARKER = "[[NEXI_NOT_ANSWERABLE]]"
 PARTIAL_KNOWLEDGE_NOTICE = "The other requested information is not learned yet."
+NEXI_MEMORY_INSTRUCTION = (
+    "You are NEXI, a warm, concise personal companion. Express only supplied "
+    "learned memory naturally. Never add outside facts, guesses, or missing "
+    "details. Preserve uncertainty; information absent from memory is not learned. "
+)
 RAG_FILLER_PHRASES = tuple(
     phrase.strip().casefold()
     for phrase in os.getenv(
@@ -291,7 +296,7 @@ def build_grounded_prompt(query: str, matches: list[dict[str, Any]]) -> tuple[st
         if compound else "If these facts do not contain what is needed to answer the question, "
     )
     prompt = (
-        f"{introduction}"
+        f"{NEXI_MEMORY_INSTRUCTION}{introduction}"
         f"{answerability_guidance}"
         f"reply with exactly this marker and nothing else: {NOT_ANSWERABLE_MARKER}\n"
         f"FACTS:\n{fact_block}\n"
@@ -397,6 +402,18 @@ def _diagnostic_headers(
     return headers
 
 
+def format_memory_fallback(facts: list[str], *, partial: bool = False) -> str:
+    """Lossless text-only presentation of approved memory on provider failure."""
+    sentences = []
+    for text in facts:
+        text = re.sub(r"\bmy\b", "your", text, flags=re.IGNORECASE).strip()
+        if text:
+            sentences.append(text[0].upper() + text[1:].rstrip(".?!") + ".")
+    if partial:
+        sentences.append(PARTIAL_KNOWLEDGE_NOTICE)
+    return " ".join(sentences)
+
+
 class RestrictedRAGPipeline:
     """Enforce command/retrieval/generation ordering with injected clients."""
 
@@ -434,7 +451,9 @@ class RestrictedRAGPipeline:
             retrieval_args["user_id"] = user_id
         candidates = []
         accepted = {}
+        clause_keys = []
         for clause in _retrieval_clauses(retrieval_query):
+            relevant_keys = set()
             retrieval = await self.teachme_client.search_by_embedding(**{**retrieval_args, "query": clause})
             for item in (retrieval or {}).get("results", [])[:RAG_TOP_K]:
                 candidates.append(item)
@@ -446,8 +465,10 @@ class RestrictedRAGPipeline:
                             item.get("type"), item.get("id"), score, relevant)
                 if relevant:
                     key = item.get("id") or _fact_text(item)
+                    relevant_keys.add(key)
                     if key not in accepted or score > float(accepted[key].get("similarity", 0.0)):
                         accepted[key] = item
+            clause_keys.append(relevant_keys)
         matches = sorted(accepted.values(), key=lambda item: float(item.get("similarity", 0.0)), reverse=True)[:RAG_TOP_K]
         best_similarity = max(
             (float(item.get("similarity", 0.0)) for item in candidates),
@@ -464,6 +485,8 @@ class RestrictedRAGPipeline:
             )
 
         prompt, facts = build_grounded_prompt(query, matches)
+        logger.info("rag_context record_ids=%s record_types=%s llm_called=true",
+                    [item.get("id") for item in matches], [item.get("type") for item in matches])
         success, result = await self.llm_client.generate_response(
             prompt,
             language="en",
@@ -472,7 +495,17 @@ class RestrictedRAGPipeline:
             request_context="teachme",
         )
         if not success:
-            raise RAGProviderError(result.get("error", "LLM generation failed"))
+            selected_keys = {item.get("id") or _fact_text(item) for item in matches}
+            partial = len(clause_keys) > 1 and any(not (keys & selected_keys) for keys in clause_keys)
+            response = format_memory_fallback(facts, partial=partial)
+            logger.warning("rag_composition fallback=true reason=provider_failure")
+            return RAGResult(
+                response=response, source="teachme_grounded",
+                query_tokens=query_tokens, retrieval_terms=retrieval_terms,
+                best_similarity=best_similarity,
+                resolved_entity=str(matches[0].get("data", {}).get("subject") or "") or None,
+            )
+        logger.info("rag_composition fallback=false")
         response = result.get("response", "")
         if NOT_ANSWERABLE_MARKER in response:
             logger.info("teachme_not_answerable query=%r", query)

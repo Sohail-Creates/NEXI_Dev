@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "01_central_server"))
 from restricted_rag import (
-    NOT_ANSWERABLE_MARKER, PARTIAL_KNOWLEDGE_NOTICE, RestrictedRAGPipeline,
+    NOT_ANSWERABLE_MARKER, PARTIAL_KNOWLEDGE_NOTICE, NEXI_MEMORY_INSTRUCTION, RestrictedRAGPipeline,
     build_grounded_prompt,
 )
 
@@ -74,6 +74,7 @@ async def test_single_record_prompt_and_behavior_unchanged(record, query, respon
     )
     text = facts[0] if record["type"] == "fact" else "[object] " + facts[0]
     assert prompt == (
+        NEXI_MEMORY_INSTRUCTION +
         "Answer the question strictly and only from the facts below. "
         "Do not add outside knowledge, assumptions, or new claims. "
         + object_guidance + "If these facts do not contain what is needed to answer the question, "
@@ -120,3 +121,31 @@ def test_presentation_order_follows_question_without_mutating_retrieved_records(
     assert texts == ["My hometown is Quito", "My travel mug"]
     assert records == [OBJECT, FACT]
     assert prompt.index("My hometown is Quito") < prompt.index("[object] My travel mug")
+
+
+class UnavailableFormatter(Formatter):
+    async def generate_response(self, prompt, **kwargs):
+        self.calls += 1
+        return False, {"error": "unavailable"}
+
+
+@pytest.mark.parametrize("records,query,expected", [
+    ([FACT], "My hometown", "Your hometown is Quito."),
+    ([FACT, OBJECT], "My hometown and my travel mug", "Your hometown is Quito. Your travel mug."),
+])
+async def test_provider_failure_preserves_approved_memory(records, query, expected):
+    llm = UnavailableFormatter("")
+    result = await RestrictedRAGPipeline(Retrieval(records), llm).answer(query)
+    assert result.response == expected
+    assert result.source == "teachme_grounded" and llm.calls == 1
+
+
+async def test_partial_provider_failure_does_not_invent_unknown_topic():
+    class PartialRetrieval:
+        async def search_by_embedding(self, **kwargs):
+            return {"results": [FACT] if "hometown" in kwargs["query"] else []}
+    llm = UnavailableFormatter("")
+    result = await RestrictedRAGPipeline(PartialRetrieval(), llm).answer(
+        "My hometown and my spacecraft engine")
+    assert result.response == "Your hometown is Quito. " + PARTIAL_KNOWLEDGE_NOTICE
+    assert llm.calls == 1
