@@ -29,15 +29,15 @@ def create_generation_routes(openrouter_client):
 
     @router.get("/model-info")
     async def model_info():
-        return {"provider": "openrouter", "model": openrouter_client.model}
+        return {"provider": getattr(openrouter_client, "provider", "openrouter"), "model": openrouter_client.model}
     
     @router.post("/generate")
     async def generate(req: GenerationRequest):
         try:
             text, metadata, success = await openrouter_client.generate(
                 prompt=req.query,
-                max_tokens=req.max_tokens,
-                temperature=req.temperature,
+                max_tokens=(req.max_tokens if "max_tokens" in req.model_fields_set or not hasattr(openrouter_client, "settings") else None),
+                temperature=(req.temperature if "temperature" in req.model_fields_set or not hasattr(openrouter_client, "settings") else None),
             )
             
             if not success:
@@ -58,6 +58,8 @@ def create_generation_routes(openrouter_client):
     @router.get("/health")
     async def health():
         healthy = openrouter_client.is_healthy()
-        return {"status": "healthy" if healthy else "degraded", "openrouter": healthy}
+        details = openrouter_client.status() if hasattr(openrouter_client, "status") else {}
+        return {"status": "healthy", "openrouter": healthy, **details,
+                "capability_status": "available" if healthy else "degraded"}
     
     return router

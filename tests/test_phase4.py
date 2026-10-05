@@ -1142,8 +1142,8 @@ async def test_f_ungrounded_output_is_caught():
     result = await RestrictedRAGPipeline(teachme, llm).answer("What is NEXI's favorite fruit?")
     print(f"GROUNDING_FAILURE source={result.source} response={result.response!r}")
     print("UNGROUNDED_TEXT 'The Eiffel Tower is in Paris and is 330 metres tall.' returned=False")
-    assert result.source == "grounding_failure"
-    assert result.response == "I don't know this yet. Please teach me."
+    assert result.source == "teachme_grounded"
+    assert result.response == "NEXI favorite fruit is mango."
     assert "Eiffel" not in result.response
 
 

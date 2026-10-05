@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -54,6 +55,8 @@ class LLMServiceClient:
         request_context: str = "conversation",
     ) -> Tuple[bool, Dict[str, Any]]:
         """Generate text; all failures remain failures and never become canned text."""
+        if os.getenv("LLM_ENABLED", "1").strip().lower() in {"0", "false"}:
+            return False, {"error": "llm_disabled", "fallback_ready": True}
         await self.cooperate_with_focus(request_context)
         if not self.circuit_breaker.is_available():
             return False, {
@@ -88,9 +91,14 @@ class LLMServiceClient:
                 self.circuit_breaker.record_failure()
                 return False, {"error": result.get("error", "LLM generation failed")}
 
+            text = result.get("text")
+            if not isinstance(text, str) or not text.strip():
+                self.circuit_breaker.record_failure()
+                return False, {"error": "Invalid LLM response"}
+
             self.circuit_breaker.record_success()
             return True, {
-                "response": result.get("text", ""),
+                "response": text,
                 "language": language,
                 "metadata": result.get("metadata", {}),
             }

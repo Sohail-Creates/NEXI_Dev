@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from basic_commands import classify_basic_command, is_stop_command
 from conversations_persistence import add_conversation
 from shared.clients.llm_client import LLMServiceClient
+from shared.grounded_formatter import format_grounded_response
 from shared.semantic_embeddings import knowledge_text
 from teachme_connector import get_teachme_connector
 from shared.security import TRUSTED_USER_HEADER, internal_service_headers, require_internal_service
@@ -404,14 +405,7 @@ def _diagnostic_headers(
 
 def format_memory_fallback(facts: list[str], *, partial: bool = False) -> str:
     """Lossless text-only presentation of approved memory on provider failure."""
-    sentences = []
-    for text in facts:
-        text = re.sub(r"\bmy\b", "your", text, flags=re.IGNORECASE).strip()
-        if text:
-            sentences.append(text[0].upper() + text[1:].rstrip(".?!") + ".")
-    if partial:
-        sentences.append(PARTIAL_KNOWLEDGE_NOTICE)
-    return " ".join(sentences)
+    return format_grounded_response(facts, partial=partial, partial_notice=PARTIAL_KNOWLEDGE_NOTICE)
 
 
 class RestrictedRAGPipeline:
@@ -485,7 +479,18 @@ class RestrictedRAGPipeline:
             )
 
         prompt, facts = build_grounded_prompt(query, matches)
-        logger.info("rag_context record_ids=%s record_types=%s llm_called=true",
+        def fallback_result(reason: str) -> RAGResult:
+            selected_keys = {item.get("id") or _fact_text(item) for item in matches}
+            partial = len(clause_keys) > 1 and any(not (keys & selected_keys) for keys in clause_keys)
+            logger.warning("rag_composition fallback=true reason=%s", reason)
+            return RAGResult(
+                response=format_memory_fallback(facts, partial=partial), source="teachme_grounded",
+                query_tokens=query_tokens, retrieval_terms=retrieval_terms,
+                best_similarity=best_similarity,
+                resolved_entity=str(matches[0].get("data", {}).get("subject") or "") or None,
+            )
+
+        logger.info("rag_context record_ids=%s record_types=%s",
                     [item.get("id") for item in matches], [item.get("type") for item in matches])
         success, result = await self.llm_client.generate_response(
             prompt,
@@ -494,18 +499,8 @@ class RestrictedRAGPipeline:
             temperature=0.2,
             request_context="teachme",
         )
-        if not success:
-            selected_keys = {item.get("id") or _fact_text(item) for item in matches}
-            partial = len(clause_keys) > 1 and any(not (keys & selected_keys) for keys in clause_keys)
-            response = format_memory_fallback(facts, partial=partial)
-            logger.warning("rag_composition fallback=true reason=provider_failure")
-            return RAGResult(
-                response=response, source="teachme_grounded",
-                query_tokens=query_tokens, retrieval_terms=retrieval_terms,
-                best_similarity=best_similarity,
-                resolved_entity=str(matches[0].get("data", {}).get("subject") or "") or None,
-            )
-        logger.info("rag_composition fallback=false")
+        if not success or not isinstance(result.get("response"), str) or not result["response"].strip():
+            return fallback_result("provider_failure_or_disabled")
         response = result.get("response", "")
         if NOT_ANSWERABLE_MARKER in response:
             logger.info("teachme_not_answerable query=%r", query)
@@ -526,14 +521,8 @@ class RestrictedRAGPipeline:
                 "", response,
             )
         if not is_grounded(grounded_content, facts):
-            logger.warning("grounding_validation_failed query=%r", query)
-            return RAGResult(
-                response=TEACH_ME_RESPONSE,
-                source="grounding_failure",
-                query_tokens=query_tokens,
-                retrieval_terms=retrieval_terms,
-                best_similarity=best_similarity,
-            )
+            return fallback_result("grounding_rejected")
+        logger.info("rag_composition fallback=false")
         return RAGResult(
             response=response,
             source="teachme_grounded",

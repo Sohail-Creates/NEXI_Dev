@@ -111,7 +111,7 @@ async def test_composition_cannot_bypass_factual_grounding(response):
     llm = Formatter(response)
     result = await RestrictedRAGPipeline(Retrieval([FACT, OBJECT]), llm).answer(
         "Tell me about my hometown and my travel mug.")
-    assert result.source == "grounding_failure"
+    assert result.source == "teachme_grounded"
     assert result.response != response
 
 

@@ -23,7 +23,7 @@ load_dotenv()
 
 # Import service components
 from llm_service.config import HOST, PORT
-from llm_service.services.openrouter_client import OpenRouterClient
+from llm_service.services.expression_service import ExpressionService
 from llm_service.routes.generation import create_generation_routes
 from llm_service.routes.format import create_format_router
 
@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 # Construct the configured provider without performing network I/O so routes are
 # present in OpenAPI before lifespan startup and at runtime alike.
-openrouter_client = OpenRouterClient()
+openrouter_client = ExpressionService()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
