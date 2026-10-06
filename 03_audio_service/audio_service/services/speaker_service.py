@@ -377,6 +377,11 @@ class SpeakerService:
             "margin": float(margin) if margin is not None else None,
             "threshold": threshold,
             "min_margin": margin_limit,
+            "top1_user": scored[0][1] if scored else None,
+            "top1_score": float(best_score) if scored else None,
+            "top2_user": scored[1][1] if len(scored) > 1 else None,
+            "top2_score": float(scored[1][0]) if len(scored) > 1 else None,
+            "candidate_count": len(scored),
         }
 
     def identify_speaker(self, audio_path: str) -> Dict[str, object]:

@@ -42,7 +42,8 @@ def create_generation_routes(openrouter_client):
             
             if not success:
                 logger.error(f"Generation failed: {metadata.get('error')}")
-                raise HTTPException(status_code=500, detail=f"Generation failed: {metadata.get('error')}")
+                raise HTTPException(status_code=500, detail=f"Generation failed: {metadata.get('error')}",
+                                    headers={"X-NEXI-LLM-Failure": metadata.get("error", "provider_failure")})
             
             return {
                 "success": True,

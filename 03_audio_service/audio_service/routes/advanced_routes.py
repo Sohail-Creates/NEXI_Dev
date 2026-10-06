@@ -31,6 +31,7 @@ from audio_service.models import (
 )
 from audio_service.services.wake_word_service import WakeWordService
 from audio_service.services.speaker_service import SpeakerService, SpeakerServiceError
+from audio_service.config import SPEAKER_CONFIG
 from audio_service.services.stt_service import STTService, STTServiceError
 from audio_service.utils.errors import WakeWordError
 
@@ -729,6 +730,14 @@ async def debug_speakers():
                 "speakers_loaded": speaker_count,
                 "speaker_ids": speakers_in_memory
             },
+            "identification_policy": {
+                "required_threshold": float(SPEAKER_CONFIG["verification_threshold"]),
+                "required_margin": float(SPEAKER_CONFIG["min_margin"]),
+                "embedding_dimension": 256,
+                "metric": "cosine_similarity",
+                "candidate_aggregation": "L2_normalized_mean",
+                "single_candidate_policy": "absolute_threshold_only",
+            },
             "validation": validation_report,
             "disk": disk_status,
             "summary": {
@@ -828,6 +837,13 @@ async def verify_speaker(file: UploadFile = File(...)):
             decision=decision,
             similarity=round(confidence, 4),
             margin=round(result["margin"], 4) if result["margin"] is not None else None,
+            top1_user=result.get("top1_user"),
+            top1_score=result.get("top1_score"),
+            top2_user=result.get("top2_user"),
+            top2_score=result.get("top2_score"),
+            required_threshold=threshold,
+            required_margin=result.get("min_margin"),
+            candidate_count=result.get("candidate_count"),
         )
         
         logger.info(

@@ -143,6 +143,8 @@ def test_e2e_enroll_verify_grounded_answer_persist_and_sync_eligible(monkeypatch
         answer = answered.json()
         assert answer["source"] == "teachme_grounded"
         assert answer["response"] == "NEXI charging dock is beside the blue sofa"
+        assert answer["response_source"] == "llm" and not answer["fallback_used"]
+        assert answer["retrieved_record_ids"] == ["fact-e2e"]
         assert llm.calls == 1 and teachme.search_users == [user_id]
         assert "FACTS:" in llm.prompts[0] and "beside the blue sofa" in llm.prompts[0]
         print(
@@ -168,11 +170,13 @@ def test_e2e_enroll_verify_grounded_answer_persist_and_sync_eligible(monkeypatch
             json={"query": "What is the orbital period of Neptune?"},
         )
         assert fallback.status_code == 200, fallback.text
-        assert fallback.json() == {
+        assert {key: fallback.json()[key] for key in ("success", "response", "source")} == {
             "success": True,
             "response": "I don't know this yet. Please teach me.",
             "source": "no_match",
         }
+        assert fallback.json()["response_source"] == "deterministic"
+        assert not fallback.json()["fallback_used"] and llm.calls == 1
         after_fallback = central.get(f"/users/{user_id}/conversations", headers=user_headers)
         assert after_fallback.status_code == 200 and after_fallback.json()["count"] == 2
         newest = after_fallback.json()["conversations"][0]

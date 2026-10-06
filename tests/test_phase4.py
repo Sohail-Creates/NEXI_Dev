@@ -810,9 +810,9 @@ def test_speaker_verification_narrative_reports_score_and_threshold(capsys):
         ),
     )
     captured = capsys.readouterr().out
-    assert "Speaker not recognized (confidence 0.00; threshold 0.65)." in captured
+    assert "Speaker not recognized (confidence 0.0000; threshold 0.6500)." in captured
     assert "Please enroll or re-enroll this speaker." in captured
-    assert captured.index("confidence 0.00") < captured.index("Please enroll")
+    assert captured.index("confidence 0.0000") < captured.index("Please enroll")
 
 
 def test_knowledge_lists_show_compact_previews_and_cap_large_output(capsys):
@@ -1061,6 +1061,7 @@ class _HTTPResponse:
     def __init__(self, status_code, body):
         self.status_code = status_code
         self._body = body
+        self.headers = {}
 
     def json(self):
         return self._body
@@ -1105,7 +1106,7 @@ async def test_e_client_response_shape_and_failure_propagation(monkeypatch):
     success, body = await client.generate_response("server prompt", request_context="teachme")
     print(f"CLIENT_FAILURE success={success} body={body}")
     assert success is False
-    assert body == {"error": "LLM service HTTP 503"}
+    assert body == {"error": "LLM service HTTP 503", "failure_reason": "provider_http_error"}
     assert "response" not in body
 
 

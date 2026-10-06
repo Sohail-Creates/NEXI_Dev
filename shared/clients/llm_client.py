@@ -56,7 +56,7 @@ class LLMServiceClient:
     ) -> Tuple[bool, Dict[str, Any]]:
         """Generate text; all failures remain failures and never become canned text."""
         if os.getenv("LLM_ENABLED", "1").strip().lower() in {"0", "false"}:
-            return False, {"error": "llm_disabled", "fallback_ready": True}
+            return False, {"error": "llm_disabled", "failure_reason": "llm_disabled", "fallback_ready": True}
         await self.cooperate_with_focus(request_context)
         if not self.circuit_breaker.is_available():
             return False, {
@@ -84,7 +84,12 @@ class LLMServiceClient:
                 )
             if response.status_code != 200:
                 self.circuit_breaker.record_failure()
-                return False, {"error": f"LLM service HTTP {response.status_code}"}
+                reason = response.headers.get("X-NEXI-LLM-Failure", "provider_http_error")
+                allowed = {"timeout", "invalid_response", "empty_response", "provider_unavailable",
+                           "llm_disabled", "missing_model", "missing_api_key", "unsupported_provider"}
+                if reason not in allowed and not (reason.startswith("http_") and reason[5:].isdigit()):
+                    reason = "provider_http_error"
+                return False, {"error": f"LLM service HTTP {response.status_code}", "failure_reason": reason}
 
             result = response.json()
             if not result.get("success"):
@@ -94,7 +99,7 @@ class LLMServiceClient:
             text = result.get("text")
             if not isinstance(text, str) or not text.strip():
                 self.circuit_breaker.record_failure()
-                return False, {"error": "Invalid LLM response"}
+                return False, {"error": "Invalid LLM response", "failure_reason": "empty_response"}
 
             self.circuit_breaker.record_success()
             return True, {
@@ -104,7 +109,7 @@ class LLMServiceClient:
             }
         except (asyncio.TimeoutError, httpx.TimeoutException):
             self.circuit_breaker.record_failure()
-            return False, {"error": "LLM service timeout"}
+            return False, {"error": "LLM service timeout", "failure_reason": "timeout"}
         except (httpx.ConnectError, httpx.RequestError):
             self.circuit_breaker.record_failure()
             return False, {"error": "LLM service unavailable"}

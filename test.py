@@ -497,12 +497,25 @@ class LiveRESTClient:
             threshold = body.get("threshold")
             user_id = body.get("user_id")
             verified = bool(body.get("is_verified"))
-            confidence_text = f"{float(confidence):.2f}" if confidence is not None else "not reported"
-            threshold_text = f"{float(threshold):.2f}" if threshold is not None else "not reported"
+            confidence_text = f"{float(confidence):.4f}" if confidence is not None else "not reported"
+            threshold_text = f"{float(threshold):.4f}" if threshold is not None else "not reported"
+            decision = str(body.get("decision") or "not reported").upper()
+            if body.get("decision"):
+                print(f"Speaker decision: {decision}")
+                for rank in (1, 2):
+                    score = body.get(f"top{rank}_score")
+                    if score is not None:
+                        print(f"Top-{rank}: {body.get(f'top{rank}_user')} {float(score):.4f}")
+                margin = body.get("margin")
+                required_margin = body.get("required_margin")
+                print(f"Required threshold: {threshold_text}; candidates: {body.get('candidate_count', 'not reported')}")
+                print("Margin: " + (f"{float(margin):.4f}" if margin is not None else "not applicable")
+                      + "; required margin: " + (f"{float(required_margin):.4f}" if required_margin is not None else "not reported"))
             if response.ok and verified:
                 print(f"Speaker verified as {user_id} (confidence {confidence_text}; threshold {threshold_text}).")
             else:
-                message = f"Speaker not recognized (confidence {confidence_text}; threshold {threshold_text})."
+                status_text = "Speaker ambiguous" if decision == "AMBIGUOUS" else "Speaker not recognized"
+                message = f"{status_text} (confidence {confidence_text}; threshold {threshold_text})."
                 if confidence is not None and float(confidence) == 0.0:
                     message += " Please enroll or re-enroll this speaker."
                 print(message)
@@ -1771,6 +1784,19 @@ class Sprint2Console:
                     continue
 
                 answer = str(rag.body.get("response") or "")
+                if mode == "manual" or self.client.output_mode == "debug":
+                    print(f"Response source: {str(rag.body.get('response_source') or 'not reported').upper()}")
+                    fallback = rag.body.get("fallback_used")
+                    print(f"Fallback used: {'YES' if fallback is True else 'NO' if fallback is False else 'NOT REPORTED'}")
+                    if rag.body.get("fallback_reason"):
+                        print(f"Fallback reason: {rag.body['fallback_reason']}")
+                    if rag.body.get("llm_provider"):
+                        print(f"Provider: {rag.body['llm_provider']}")
+                        print(f"Model: {rag.body.get('llm_model') or 'not reported'}")
+                    if isinstance(rag.body.get("llm_latency_ms"), (int, float)):
+                        print(f"Generation latency: {rag.body['llm_latency_ms'] / 1000:.2f}s")
+                    if rag.body.get("retrieved_record_ids"):
+                        print(f"Retrieved record IDs: {', '.join(rag.body['retrieved_record_ids'])}")
                 idle_timeout_seconds = rag.headers.get(
                     "x-nexi-session-idle-timeout", idle_timeout_seconds
                 )

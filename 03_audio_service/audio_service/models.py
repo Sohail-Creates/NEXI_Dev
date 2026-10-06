@@ -202,6 +202,13 @@ class VerifySpeakerResponse(BaseModel):
     decision: Optional[str] = Field(default=None, description="matched, unknown, or ambiguous")
     similarity: Optional[float] = Field(default=None, description="Cosine similarity; not a probability")
     margin: Optional[float] = Field(default=None, description="Top-1 minus top-2 cosine similarity")
+    top1_user: Optional[str] = None
+    top1_score: Optional[float] = None
+    top2_user: Optional[str] = None
+    top2_score: Optional[float] = None
+    required_threshold: Optional[float] = None
+    required_margin: Optional[float] = None
+    candidate_count: Optional[int] = None
 
 
 # Week 2: Speech-to-Text Models

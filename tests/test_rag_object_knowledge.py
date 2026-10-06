@@ -204,7 +204,7 @@ async def test_compound_fact_object_uses_same_bounded_search_and_one_llm(knowled
     result = await RestrictedRAGPipeline(client, llm).answer("Tell me about my hometown and my water bottle.")
     assert result.source == "teachme_grounded"
     assert "Layyah" in result.response and "water bottle" in result.response
-    assert client.queries == ["my hometown", "my water bottle."]
+    assert client.queries == ["my hometown", "my water bottle"]
     assert llm.calls == 1
     assert "visual_embedding" not in llm.prompt and "instance" not in llm.prompt
 

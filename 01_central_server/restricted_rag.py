@@ -370,12 +370,31 @@ def is_grounded(response: str, facts: list[str]) -> bool:
     return coverage >= 0.9 and similarity >= 0.45
 
 
+def _clean_compound_clause(clause: str) -> str:
+    """Remove leading request grammar and a trailing taught-memory reference."""
+    clause = re.sub(
+        r"^(?:(?:please|naturally|both)\s+|(?:can|could|would)\s+you\s+|"
+        r"tell\s+me\s+|what\s+(?:do\s+you|you)\s+(?:know|remember)\s+|what\s+about\s+|about\s+)+",
+        "", clause.strip(), flags=re.IGNORECASE,
+    )
+    clause = re.sub(r"\s+(?:that\s+)?I\s+(?:taught|told|showed)\s+you(?:\s+about)?[.!?]*$",
+                    "", clause, flags=re.IGNORECASE)
+    return clause.strip(" \t.,;?!")
+
+
 def _retrieval_clauses(query: str) -> list[str]:
     """Bound explicit separately named topics; preserve ordinary single queries."""
     if RAG_TOP_K <= 1:
         return [query]
-    return re.split(r"\s+and\s+(?=(?:my|our|your|the)\b)", query,
-                    maxsplit=RAG_TOP_K - 1, flags=re.IGNORECASE)
+    # Named topics avoid splitting ordinary labels such as "bread and butter".
+    connector = r"\s+(?:and(?:\s+also)?|also|as\s+well\s+as)\s+"
+    if not re.search(r"\bboth\s+", query, flags=re.IGNORECASE):
+        connector += r"(?=(?:my|our|your|the|a|an|this|that|these|those)\b)"
+    clauses = re.split(connector, query, maxsplit=RAG_TOP_K - 1, flags=re.IGNORECASE)
+    if len(clauses) == 1:
+        return [query]
+    cleaned = [_clean_compound_clause(clause) for clause in clauses]
+    return cleaned if all(cleaned) else [query]
 
 
 @dataclass(frozen=True)
@@ -386,6 +405,13 @@ class RAGResult:
     retrieval_terms: tuple[str, ...] = ()
     best_similarity: float | None = None
     resolved_entity: str | None = None
+    response_source: str = "deterministic"
+    fallback_used: bool = False
+    fallback_reason: str | None = None
+    llm_provider: str | None = None
+    llm_model: str | None = None
+    llm_latency_ms: float | None = None
+    retrieved_record_ids: tuple[str, ...] = ()
 
 
 def _diagnostic_headers(
@@ -446,7 +472,7 @@ class RestrictedRAGPipeline:
         candidates = []
         accepted = {}
         clause_keys = []
-        for clause in _retrieval_clauses(retrieval_query):
+        for clause_index, clause in enumerate(_retrieval_clauses(retrieval_query)):
             relevant_keys = set()
             retrieval = await self.teachme_client.search_by_embedding(**{**retrieval_args, "query": clause})
             for item in (retrieval or {}).get("results", [])[:RAG_TOP_K]:
@@ -455,8 +481,10 @@ class RestrictedRAGPipeline:
                 relevant = score >= RAG_MATCH_THRESHOLD or (
                     score >= RAG_CANDIDATE_THRESHOLD and _has_meaningful_overlap(clause, item)
                 )
-                logger.info("rag_candidate type=%s record_id=%s similarity=%.4f accepted=%s",
-                            item.get("type"), item.get("id"), score, relevant)
+                reason = ("match_threshold" if score >= RAG_MATCH_THRESHOLD else
+                          "candidate_threshold_and_overlap" if relevant else "insufficient_relevance")
+                logger.info("rag_candidate clause_index=%d type=%s record_id=%s similarity=%.4f accepted=%s reason=%s",
+                            clause_index, item.get("type"), item.get("id"), score, relevant, reason)
                 if relevant:
                     key = item.get("id") or _fact_text(item)
                     relevant_keys.add(key)
@@ -479,12 +507,14 @@ class RestrictedRAGPipeline:
             )
 
         prompt, facts = build_grounded_prompt(query, matches)
+        record_ids = tuple(str(item["id"]) for item in matches if item.get("id"))
         def fallback_result(reason: str) -> RAGResult:
             selected_keys = {item.get("id") or _fact_text(item) for item in matches}
             partial = len(clause_keys) > 1 and any(not (keys & selected_keys) for keys in clause_keys)
             logger.warning("rag_composition fallback=true reason=%s", reason)
             return RAGResult(
                 response=format_memory_fallback(facts, partial=partial), source="teachme_grounded",
+                fallback_used=True, fallback_reason=reason, retrieved_record_ids=record_ids,
                 query_tokens=query_tokens, retrieval_terms=retrieval_terms,
                 best_similarity=best_similarity,
                 resolved_entity=str(matches[0].get("data", {}).get("subject") or "") or None,
@@ -499,8 +529,10 @@ class RestrictedRAGPipeline:
             temperature=0.2,
             request_context="teachme",
         )
-        if not success or not isinstance(result.get("response"), str) or not result["response"].strip():
-            return fallback_result("provider_failure_or_disabled")
+        if not success:
+            return fallback_result(result.get("failure_reason", "provider_failure_or_disabled"))
+        if not isinstance(result.get("response"), str) or not result["response"].strip():
+            return fallback_result("empty_response")
         response = result.get("response", "")
         if NOT_ANSWERABLE_MARKER in response:
             logger.info("teachme_not_answerable query=%r", query)
@@ -523,9 +555,14 @@ class RestrictedRAGPipeline:
         if not is_grounded(grounded_content, facts):
             return fallback_result("grounding_rejected")
         logger.info("rag_composition fallback=false")
+        metadata = result.get("metadata") or {}
         return RAGResult(
             response=response,
             source="teachme_grounded",
+            response_source="llm", llm_provider=metadata.get("source"),
+            llm_model=metadata.get("model"), retrieved_record_ids=record_ids,
+            llm_latency_ms=(round(metadata["elapsed_seconds"] * 1000, 2)
+                            if isinstance(metadata.get("elapsed_seconds"), (int, float)) else None),
             query_tokens=query_tokens,
             retrieval_terms=retrieval_terms,
             best_similarity=best_similarity,
@@ -656,7 +693,11 @@ async def restricted_query(request: RAGQueryRequest, http_request: Request, resp
         response.headers["X-NEXI-Session-Ended"] = str(is_farewell).lower()
         response.headers["X-NEXI-Session-Turn-Count"] = str(session_state.turn_count)
         response.headers["X-NEXI-Session-Idle-Timeout"] = str(RAG_SESSION_IDLE_SECONDS)
-        return {"success": True, "response": result.response, "source": result.source}
+        return {"success": True, "response": result.response, "source": result.source,
+                "response_source": result.response_source, "fallback_used": result.fallback_used,
+                "fallback_reason": result.fallback_reason, "llm_provider": result.llm_provider,
+                "llm_model": result.llm_model, "llm_latency_ms": result.llm_latency_ms,
+                "retrieved_record_ids": list(result.retrieved_record_ids)}
     except NoSpeechDetected:
         return {"success": True, "status": "no_speech", "response": "No speech detected", "source": "no_speech"}
     except NonEnglishQueryError as exc:
