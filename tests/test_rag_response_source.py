@@ -61,7 +61,8 @@ async def test_fallback_provenance(text, success, reason):
     assert result.llm_provider is None
 
 
-@pytest.mark.parametrize("query,records", [("Unknown spacecraft", []), ("Goodbye", [FACT])])
+@pytest.mark.parametrize("query,records", [("Unknown spacecraft", []), ("Goodbye", [FACT]),
+                                         ("Thank you.", [FACT])])
 async def test_unknown_and_command_never_call_expression_layer(query, records):
     formatter = Formatter("must not be used")
     result = await RestrictedRAGPipeline(Store(records), formatter).answer(query)

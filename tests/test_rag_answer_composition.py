@@ -53,7 +53,7 @@ async def test_natural_combined_response_and_one_formatting_call(records, query,
     assert result.response == response
     assert llm.calls == 1
     assert "connect them smoothly" in llm.prompt
-    assert "Preserve the supplied order and meaningful phrases" in llm.prompt
+    assert "preserving factual meaning exactly" in llm.prompt
     assert "at most two short sentences" in llm.prompt
     assert not any(value in llm.prompt for value in (
         "private-fact-id", "private-object-id", "private-metadata", "12345", "0.95", "0.96"))
@@ -70,14 +70,18 @@ async def test_single_record_prompt_and_behavior_unchanged(record, query, respon
         "For object records, the stored personal label is itself taught knowledge "
         "about that object. Answer label questions from that label even if no "
         "description exists; do not invent uses or locations. Keep the answer "
-        "concise using the stored wording. " if record["type"] == "object" else ""
+        "concise while expressing the stored meaning naturally. " if record["type"] == "object" else ""
     )
     text = facts[0] if record["type"] == "fact" else "[object] " + facts[0]
     assert prompt == (
         NEXI_MEMORY_INSTRUCTION +
         "Answer the question strictly and only from the facts below. "
         "Do not add outside knowledge, assumptions, or new claims. "
-        + object_guidance + "If these facts do not contain what is needed to answer the question, "
+        + object_guidance + "If the supplied knowledge identifies the requested topic but does not "
+        "contain its requested property, briefly state only the known information "
+        f"and append exactly: {PARTIAL_KNOWLEDGE_NOTICE} "
+        "Do not infer the missing property. If none of the supplied knowledge "
+        "answers any part of the question, "
         + f"reply with exactly this marker and nothing else: {NOT_ANSWERABLE_MARKER}\n"
         + f"FACTS:\n- {text}\nQUESTION:\n{query}"
     )

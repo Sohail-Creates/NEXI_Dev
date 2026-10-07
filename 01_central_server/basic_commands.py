@@ -21,14 +21,27 @@ BASIC_COMMAND_RESPONSES = {
     "stop": "Stopping.",
     "thank you": "You're welcome!",
     "thanks": "You're welcome!",
+    "okay": "Okay!",
+    "ok": "Okay!",
+    "cool": "Cool!",
     "help": "Please ask me about something you have taught me.",
 }
+
+_FAREWELL_PATTERN = "(?:" + "|".join(
+    re.escape(phrase) for phrase, response in BASIC_COMMAND_RESPONSES.items()
+    if response in {BASIC_COMMAND_RESPONSES["goodbye"], BASIC_COMMAND_RESPONSES["stop"]}
+) + ")"
 
 
 def _normalize(text: str) -> str:
     words = re.findall(r"[a-z0-9']+", text.casefold())
-    normalized = " ".join(words)
-    return "goodbye" if normalized == "good bye" else normalized
+    normalized = re.sub(r"\bgood bye\b", "goodbye", " ".join(words))
+    # Only complete farewell repetitions qualify, not sentences mentioning one.
+    acknowledgement = r"(?:okay|ok|cool|thanks|thank you)"
+    if re.fullmatch(rf"(?:{acknowledgement} )?{_FAREWELL_PATTERN}(?: {_FAREWELL_PATTERN})*", normalized):
+        normalized = re.sub(rf"^{acknowledgement} ", "", normalized)
+        return re.match(_FAREWELL_PATTERN, normalized).group(0)
+    return normalized
 
 
 def is_stop_command(text: str, farewell_phrases: frozenset[str]) -> bool:

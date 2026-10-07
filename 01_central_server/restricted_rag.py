@@ -38,9 +38,18 @@ RAG_TOP_K = int(os.getenv("RAG_TOP_K", "3"))
 NOT_ANSWERABLE_MARKER = "[[NEXI_NOT_ANSWERABLE]]"
 PARTIAL_KNOWLEDGE_NOTICE = "The other requested information is not learned yet."
 NEXI_MEMORY_INSTRUCTION = (
-    "You are NEXI, a warm, concise personal companion. Express only supplied "
-    "learned memory naturally. Never add outside facts, guesses, or missing "
-    "details. Preserve uncertainty; information absent from memory is not learned. "
+    "You are NEXI, a warm, concise personal companion. Answer only from supplied "
+    "learned memory, never outside facts, explanations, assumptions, or guesses. "
+    "Compose a natural conversational answer that directly addresses the question, "
+    "not a replay of record labels or wording. You may change grammar, pronouns, "
+    "sentence order, and transitions while preserving factual meaning exactly. "
+    "Keep learned names and descriptive terms explicit. Preserve the original "
+    "relationships: identifying something does not establish ownership, location, "
+    "or use. Naturalize the grammatical framing, not those factual relationships. "
+    "Combine multiple memories smoothly into one coherent response, using one "
+    "sentence or at most two short sentences. Do not mention record types, IDs, "
+    "scores, retrieval, databases, or metadata. Preserve uncertainty; missing "
+    "information has not been learned. "
 )
 RAG_FILLER_PHRASES = tuple(
     phrase.strip().casefold()
@@ -269,7 +278,7 @@ def build_grounded_prompt(query: str, matches: list[dict[str, Any]]) -> tuple[st
         "For object records, the stored personal label is itself taught knowledge "
         "about that object. Answer label questions from that label even if no "
         "description exists; do not invent uses or locations. Keep the answer "
-        "concise using the stored wording. "
+        "concise while expressing the stored meaning naturally. "
         if any(item["type"] == "object" for item in matches) else ""
     )
     compound = len(_retrieval_clauses(normalize_retrieval_query(query))) > 1
@@ -278,8 +287,8 @@ def build_grounded_prompt(query: str, matches: list[dict[str, Any]]) -> tuple[st
         "This is a wording task, not an open-ended knowledge question. Rewrite "
         "the supplied statements as one concise natural sentence, or at most two "
         "short sentences, and connect them smoothly with a conjunction. Change "
-        "first-person pronouns to address the user. Preserve the supplied order "
-        "and meaningful phrases, names, descriptions, and claims. Do not infer "
+        "first-person pronouns to address the user. Preserve the meaning of "
+        "names, descriptions, and claims, not their exact wording. Do not infer "
         "possession or add words expressing new properties. Do not summarize, "
         "list records, or show headings, record types, IDs, scores, or metadata. "
         "Use only supplied knowledge; do not invent missing details. Return only "
@@ -294,7 +303,12 @@ def build_grounded_prompt(query: str, matches: list[dict[str, Any]]) -> tuple[st
         f"{PARTIAL_KNOWLEDGE_NOTICE} Do not guess the missing information. "
         "If all requested parts are known, do not append that notice. "
         "If none of the supplied knowledge answers any part of the question, "
-        if compound else "If these facts do not contain what is needed to answer the question, "
+        if compound else
+        "If the supplied knowledge identifies the requested topic but does not "
+        "contain its requested property, briefly state only the known information "
+        f"and append exactly: {PARTIAL_KNOWLEDGE_NOTICE} "
+        "Do not infer the missing property. If none of the supplied knowledge "
+        "answers any part of the question, "
     )
     prompt = (
         f"{NEXI_MEMORY_INSTRUCTION}{introduction}"
@@ -305,9 +319,9 @@ def build_grounded_prompt(query: str, matches: list[dict[str, Any]]) -> tuple[st
     )
     if compose:
         prompt += (
-            "\nFINAL WORDING RULE: Output only the supplied known clauses, retaining "
-            "their wording apart from first-person to second-person correction and "
-            "natural conjunctions. Retain demonstrative statements instead of "
+            "\nFINAL WORDING RULE: Express only the supplied known information "
+            "as a coherent conversational answer, not separately replayed records. "
+            "Preserve demonstrative meaning instead of "
             "inferring ownership. Never repeat or name an unknown topic from the "
             "question in the answer; use only the exact missing-information notice "
             "above for the unknown portion."
@@ -508,9 +522,10 @@ class RestrictedRAGPipeline:
 
         prompt, facts = build_grounded_prompt(query, matches)
         record_ids = tuple(str(item["id"]) for item in matches if item.get("id"))
+        partial_response = False
         def fallback_result(reason: str) -> RAGResult:
             selected_keys = {item.get("id") or _fact_text(item) for item in matches}
-            partial = len(clause_keys) > 1 and any(not (keys & selected_keys) for keys in clause_keys)
+            partial = partial_response or (len(clause_keys) > 1 and any(not (keys & selected_keys) for keys in clause_keys))
             logger.warning("rag_composition fallback=true reason=%s", reason)
             return RAGResult(
                 response=format_memory_fallback(facts, partial=partial), source="teachme_grounded",
@@ -544,14 +559,14 @@ class RestrictedRAGPipeline:
                 best_similarity=best_similarity,
             )
         # A fixed missing-knowledge notice is presentation, not a factual claim.
-        # Only its exact compound-answer suffix is exempt; factual validation
+        # Only its exact suffix is exempt; factual validation
         # and all relevance/grounding thresholds remain unchanged.
         grounded_content = response
-        if len(_retrieval_clauses(retrieval_query)) > 1:
-            grounded_content = re.sub(
-                rf"(?:,\s+and\s+|\s+)(?i:{re.escape(PARTIAL_KNOWLEDGE_NOTICE)})\s*$",
-                "", response,
-            )
+        grounded_content = re.sub(
+            rf"(?:,\s+and\s+|\s+)(?i:{re.escape(PARTIAL_KNOWLEDGE_NOTICE)})\s*$",
+            "", response,
+        )
+        partial_response = grounded_content != response
         if not is_grounded(grounded_content, facts):
             return fallback_result("grounding_rejected")
         logger.info("rag_composition fallback=false")
