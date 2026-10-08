@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 import json
 import logging
@@ -20,6 +20,7 @@ from langdetect import DetectorFactory, LangDetectException, detect_langs
 from pydantic import BaseModel, ConfigDict, Field
 
 from basic_commands import classify_basic_command, is_stop_command
+from conversation_context import CONTEXT_ENABLED, ConversationContext, ConversationTurn, expression_context, is_reference_query
 from conversations_persistence import add_conversation
 from shared.clients.llm_client import LLMServiceClient
 from shared.grounded_formatter import format_grounded_response
@@ -118,6 +119,8 @@ class RAGSession:
     last_entity: str | None
     last_activity: float
     turn_count: int = 0
+    context: ConversationContext = field(default_factory=ConversationContext)
+    query_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 RAG_SESSION_IDLE_SECONDS = float(os.getenv("RAG_SESSION_IDLE_SECONDS", "300"))
@@ -137,8 +140,15 @@ def evict_idle_rag_sessions(now: float | None = None) -> int:
         ]
         for session_id in expired:
             state = _rag_sessions.pop(session_id)
+            state.context.clear("session_expired")
             if state.user_id is not None:
                 _expired_rag_sessions.append((session_id, state.user_id))
+        for state in _rag_sessions.values():
+            if CONTEXT_ENABLED:
+                try:
+                    state.context.snapshot(now)
+                except Exception:
+                    logger.exception("conversation_context expiry_failed")
     return len(expired)
 
 
@@ -162,7 +172,7 @@ def _resolve_session_query(
         state.last_activity = now
         state.turn_count += 1
         resolved = query
-        if state.last_entity:
+        if not CONTEXT_ENABLED and state.last_entity:
             resolved = re.sub(
                 r"\b(it|that|this|they|them|those|these)\b",
                 lambda match: state.last_entity,
@@ -190,7 +200,7 @@ def delete_rag_sessions_for_user(user_id: str) -> int:
             if state.user_id == user_id
         ]
         for session_id in session_ids:
-            _rag_sessions.pop(session_id, None)
+            _rag_sessions.pop(session_id).context.clear("user_invalidated")
         return len(session_ids)
 
 
@@ -428,6 +438,7 @@ class RAGResult:
     llm_model: str | None = None
     llm_latency_ms: float | None = None
     retrieved_record_ids: tuple[str, ...] = ()
+    context_topics: tuple[str, ...] = ()
 
 
 def _diagnostic_headers(
@@ -457,7 +468,9 @@ class RestrictedRAGPipeline:
         self.teachme_client = teachme_client
         self.llm_client = llm_client
 
-    async def answer(self, query: str, user_id: str | None = None) -> RAGResult:
+    async def answer(self, query: str, user_id: str | None = None, *,
+                     recent_context: tuple[ConversationTurn, ...] = (),
+                     current_query: str | None = None) -> RAGResult:
         if not any(character.isalnum() for character in query):
             raise NoSpeechDetected("No speech detected")
         query_tokens = tuple(_tokens(query))
@@ -471,6 +484,9 @@ class RestrictedRAGPipeline:
                 retrieval_terms=retrieval_terms,
             )
 
+        if CONTEXT_ENABLED and is_reference_query(query) and not recent_context:
+            return RAGResult(response=TEACH_ME_RESPONSE, source="no_match",
+                             query_tokens=query_tokens, retrieval_terms=retrieval_terms)
         require_english(query)
         retrieval_query = normalize_retrieval_query(query)
 
@@ -523,7 +539,21 @@ class RestrictedRAGPipeline:
             )
 
         prompt, facts = build_grounded_prompt(query, matches)
+        if recent_context:
+            try:
+                prompt += expression_context(current_query or query, recent_context)
+            except Exception:
+                logger.exception("conversation_context prompt_failed")
         record_ids = tuple(str(item["id"]) for item in matches if item.get("id"))
+        query_terms = _retrieval_terms(query)
+        def topic_position(topic: str) -> int:
+            terms = set(_retrieval_terms(topic))
+            return next((i for i, term in enumerate(query_terms) if term in terms), len(query_terms))
+        topics = tuple(sorted(dict.fromkeys(
+            str(item.get("data", {}).get("subject") or item.get("data", {}).get("name") or "")
+            for item in matches
+        ), key=topic_position))
+        topics = tuple(topic for topic in topics if topic)
         partial_response = False
         def fallback_result(reason: str) -> RAGResult:
             selected_keys = {item.get("id") or _fact_text(item) for item in matches}
@@ -532,6 +562,7 @@ class RestrictedRAGPipeline:
             return RAGResult(
                 response=format_memory_fallback(facts, partial=partial), source="teachme_grounded",
                 fallback_used=True, fallback_reason=reason, retrieved_record_ids=record_ids,
+                context_topics=topics,
                 query_tokens=query_tokens, retrieval_terms=retrieval_terms,
                 best_similarity=best_similarity,
                 resolved_entity=str(matches[0].get("data", {}).get("subject") or "") or None,
@@ -588,6 +619,7 @@ class RestrictedRAGPipeline:
             source="teachme_grounded",
             response_source="llm", llm_provider=metadata.get("source"),
             llm_model=metadata.get("model"), retrieved_record_ids=record_ids,
+            context_topics=topics,
             llm_latency_ms=(round(metadata["elapsed_seconds"] * 1000, 2)
                             if isinstance(metadata.get("elapsed_seconds"), (int, float)) else None),
             query_tokens=query_tokens,
@@ -602,9 +634,12 @@ async def _answer_while_connected(
     query: str,
     user_id: str,
     request: Request,
+    *, recent_context: tuple[ConversationTurn, ...] = (), current_query: str | None = None,
 ) -> RAGResult:
     """Propagate a disconnected REST client as cancellation through async RAG clients."""
-    task = asyncio.create_task(pipeline.answer(query, user_id=user_id))
+    kwargs = ({"recent_context": recent_context, "current_query": current_query}
+              if recent_context else {})
+    task = asyncio.create_task(pipeline.answer(query, user_id=user_id, **kwargs))
     try:
         while not task.done():
             if await request.is_disconnected():
@@ -663,7 +698,9 @@ async def close_rag_session(
 ):
     """Explicitly release manual session state when the console exits/cancels."""
     with _rag_sessions_lock:
-        _rag_sessions.pop(session_id, None)
+        state = _rag_sessions.pop(session_id, None)
+        if state:
+            state.context.clear("session_closed")
     return Response(status_code=204)
 
 
@@ -687,12 +724,47 @@ async def restricted_query(request: RAGQueryRequest, http_request: Request, resp
             session_id, user_id, request.query, allow_create=not explicit_session
         )
         pipeline = RestrictedRAGPipeline(get_teachme_connector(), _llm_client)
-        result = await _answer_while_connected(pipeline, resolved_query, user_id, http_request)
-        _update_session_entity(session_state, result)
+        context_used = False
+        context_turn_count = 0
+        context_reset_reason = None
+        # Serialize turns within a session so a slow response cannot replace a
+        # newer topic. Other users/sessions remain independent.
+        async with session_state.query_lock:
+            with _rag_sessions_lock:
+                if _rag_sessions.get(session_id) is not session_state:
+                    raise HTTPException(status_code=410, detail={"code": "SESSION_EXPIRED", "message": "Manual session expired; start a new session"})
+            recent_context = ()
+            if CONTEXT_ENABLED:
+                try:
+                    resolved_query, recent_context = session_state.context.resolve(request.query)
+                    context_used = bool(recent_context)
+                    context_reset_reason = session_state.context.reset_reason
+                except Exception:
+                    logger.exception("conversation_context resolution_failed")
+                    resolved_query = request.query
+            result = await _answer_while_connected(
+                pipeline, resolved_query, user_id, http_request,
+                recent_context=recent_context, current_query=request.query,
+            )
+            _update_session_entity(session_state, result)
+            if CONTEXT_ENABLED:
+                try:
+                    # Closing a session during inference must not resurrect it.
+                    with _rag_sessions_lock:
+                        if _rag_sessions.get(session_id) is session_state:
+                            if result.source != "basic_command":
+                                session_state.context.append(request.query, result.response,
+                                                             result.retrieved_record_ids, result.context_topics)
+                            context_turn_count = len(session_state.context.turns)
+                except Exception:
+                    logger.exception("conversation_context append_failed")
         is_farewell = result.source == "basic_command" and is_stop_command(request.query, RAG_FAREWELL_PHRASES)
         if is_farewell:
             with _rag_sessions_lock:
                 _rag_sessions.pop(session_id, None)
+                session_state.context.clear("goodbye")
+                context_turn_count = 0
+                context_reset_reason = "goodbye"
         if result.source in {"teachme_grounded", "no_match", "not_answerable", "grounding_failure"}:
             persisted = await asyncio.to_thread(
                 add_conversation,
@@ -724,7 +796,9 @@ async def restricted_query(request: RAGQueryRequest, http_request: Request, resp
                 "response_source": result.response_source, "fallback_used": result.fallback_used,
                 "fallback_reason": result.fallback_reason, "llm_provider": result.llm_provider,
                 "llm_model": result.llm_model, "llm_latency_ms": result.llm_latency_ms,
-                "retrieved_record_ids": list(result.retrieved_record_ids)}
+                "retrieved_record_ids": list(result.retrieved_record_ids),
+                "context_enabled": CONTEXT_ENABLED, "context_turn_count": context_turn_count,
+                "context_used": context_used, "context_reset_reason": context_reset_reason}
     except NoSpeechDetected:
         return {"success": True, "status": "no_speech", "response": "No speech detected", "source": "no_speech"}
     except NonEnglishQueryError as exc:

@@ -425,7 +425,9 @@ async def test_short_reported_english_phrase_is_not_false_rejected():
     )
 
 
-async def test_session_resolves_pronoun_to_last_grounded_subject():
+async def test_disabled_context_preserves_existing_last_subject_resolution(monkeypatch):
+    import restricted_rag
+    monkeypatch.setattr(restricted_rag, "CONTEXT_ENABLED", False)
     from restricted_rag import (
         RAGResult, RAGSession, _rag_sessions, _update_session_entity,
         _resolve_session_query,
