@@ -45,7 +45,9 @@ NEXI_MEMORY_INSTRUCTION = (
     "sentence order, and transitions while preserving factual meaning exactly. "
     "Keep learned names and descriptive terms explicit. Preserve the original "
     "relationships: identifying something does not establish ownership, location, "
-    "or use. Naturalize the grammatical framing, not those factual relationships. "
+    "or use. For object identification, describe what it is, not what the user "
+    "has or owns; do not replace an identification with a possession claim. "
+    "Naturalize the grammatical framing, not those factual relationships. "
     "Combine multiple memories smoothly into one coherent response, using one "
     "sentence or at most two short sentences. Do not mention record types, IDs, "
     "scores, retrieval, databases, or metadata. Preserve uncertainty; missing "
@@ -550,6 +552,16 @@ class RestrictedRAGPipeline:
             return fallback_result("empty_response")
         response = result.get("response", "")
         if NOT_ANSWERABLE_MARKER in response:
+            # An approved, explicitly referenced topic is still known even when
+            # the requested property is absent. Do not discard that identity or
+            # trust any prose accompanying the model's insufficiency marker.
+            query_terms = set(_retrieval_terms(query))
+            for item in matches:
+                data = item.get("data", {})
+                topic_terms = set(_retrieval_terms(str(data.get("subject") or data.get("name") or "")))
+                if query_terms and topic_terms and (query_terms <= topic_terms or topic_terms <= query_terms):
+                    partial_response = True
+                    return fallback_result("requested_information_not_learned")
             logger.info("teachme_not_answerable query=%r", query)
             return RAGResult(
                 response=TEACH_ME_RESPONSE,

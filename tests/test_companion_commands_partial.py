@@ -66,3 +66,19 @@ async def test_missing_property_notice_cannot_hide_unsupported_claim():
     assert "Paris" not in result.response
     assert result.response.endswith(rag.PARTIAL_KNOWLEDGE_NOTICE)
     assert formatter.calls == 1
+
+
+async def test_insufficiency_marker_retains_known_topic_but_not_provider_prose():
+    formatter = Formatter("It is in Paris. " + rag.NOT_ANSWERABLE_MARKER)
+    result = await rag.RestrictedRAGPipeline(Store(), formatter).answer("Where is my blue camera?")
+    assert result.response == "Your blue camera. " + rag.PARTIAL_KNOWLEDGE_NOTICE
+    assert result.fallback_reason == "requested_information_not_learned"
+    assert result.retrieved_record_ids == ("camera",) and formatter.calls == 1
+
+
+@pytest.mark.parametrize("query", ["Where is the nearest museum?", "Where is my blue umbrella?"])
+async def test_insufficiency_marker_does_not_claim_an_unreferenced_topic(query):
+    formatter = Formatter(rag.NOT_ANSWERABLE_MARKER)
+    result = await rag.RestrictedRAGPipeline(Store(), formatter).answer(query)
+    assert result.response == rag.TEACH_ME_RESPONSE and result.source == "not_answerable"
+    assert not result.retrieved_record_ids

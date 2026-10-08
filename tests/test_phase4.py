@@ -604,7 +604,7 @@ def test_retrieval_labeled_hometown_evaluation_with_real_embeddings():
     print(f"RAG_EVAL_METRICS before={metrics(before_predictions)} after={metrics(after_predictions)} positive_misses={misses!r}")
 
 
-async def test_not_answerable_marker_maps_to_safe_no_match():
+async def test_not_answerable_property_preserves_explicitly_known_topic():
     import restricted_rag
 
     item = {
@@ -624,8 +624,10 @@ async def test_not_answerable_marker_maps_to_safe_no_match():
     result = await restricted_rag.RestrictedRAGPipeline(CandidateClient(), MarkerClient()).answer(
         "What is the capital of my hometown?", user_id="fixture-user"
     )
-    assert result.source == "not_answerable"
-    assert result.response == restricted_rag.TEACH_ME_RESPONSE
+    assert result.source == "teachme_grounded"
+    assert result.response == ("Your hometown is Layyah punjab pakistan. "
+                               + restricted_rag.PARTIAL_KNOWLEDGE_NOTICE)
+    assert result.fallback_reason == "requested_information_not_learned"
     print(f"RAG_ANSWERABILITY source={result.source} response={result.response!r}")
 
 
