@@ -55,25 +55,26 @@ async def test_single_known_entity_missing_property_keeps_known_information():
     text = "This is your blue camera. " + rag.PARTIAL_KNOWLEDGE_NOTICE
     formatter = Formatter(text)
     result = await rag.RestrictedRAGPipeline(Store(), formatter).answer("Where is my blue camera?")
-    assert result.response == text and result.response_source == "llm"
-    assert result.retrieved_record_ids == ("camera",) and formatter.calls == 1
+    assert result.response == "I remember your blue camera, but you haven't taught me where it is."
+    assert result.requested_relation == "location" and result.requested_relation_known is False
+    assert result.retrieved_record_ids == ("camera",) and formatter.calls == 0
 
 
 async def test_missing_property_notice_cannot_hide_unsupported_claim():
     formatter = Formatter("Your blue camera is in Paris. " + rag.PARTIAL_KNOWLEDGE_NOTICE)
-    result = await rag.RestrictedRAGPipeline(Store(), formatter).answer("Where is my blue camera?")
+    result = await rag.RestrictedRAGPipeline(Store(), formatter).answer("Tell me about my blue camera")
     assert result.fallback_reason == "grounding_rejected"
     assert "Paris" not in result.response
-    assert result.response.endswith(rag.PARTIAL_KNOWLEDGE_NOTICE)
+    assert result.response == "Your blue camera."
+    assert result.requested_relation_known is True
     assert formatter.calls == 1
 
 
 async def test_insufficiency_marker_retains_known_topic_but_not_provider_prose():
     formatter = Formatter("It is in Paris. " + rag.NOT_ANSWERABLE_MARKER)
     result = await rag.RestrictedRAGPipeline(Store(), formatter).answer("Where is my blue camera?")
-    assert result.response == "Your blue camera. " + rag.PARTIAL_KNOWLEDGE_NOTICE
-    assert result.fallback_reason == "requested_information_not_learned"
-    assert result.retrieved_record_ids == ("camera",) and formatter.calls == 1
+    assert result.response == "I remember your blue camera, but you haven't taught me where it is."
+    assert result.retrieved_record_ids == ("camera",) and formatter.calls == 0
 
 
 @pytest.mark.parametrize("query", ["Where is the nearest museum?", "Where is my blue umbrella?"])

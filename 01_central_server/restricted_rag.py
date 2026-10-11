@@ -20,6 +20,7 @@ from langdetect import DetectorFactory, LangDetectException, detect_langs
 from pydantic import BaseModel, ConfigDict, Field
 
 from basic_commands import classify_basic_command, is_stop_command
+from answerability import build_answer_plan, without_attribution
 from conversation_context import CONTEXT_ENABLED, ConversationContext, ConversationTurn, expression_context, is_reference_query
 from conversations_persistence import add_conversation
 from shared.clients.llm_client import LLMServiceClient
@@ -52,7 +53,9 @@ NEXI_MEMORY_INSTRUCTION = (
     "Combine multiple memories smoothly into one coherent response, using one "
     "sentence or at most two short sentences. Do not mention record types, IDs, "
     "scores, retrieval, databases, or metadata. Preserve uncertainty; missing "
-    "information has not been learned. "
+    "information has not been learned. Answer the requested intent, not merely "
+    "a related label. Keep a familiar, natural companion tone without adding "
+    "emotions, explanations, or unsupported details. "
 )
 RAG_FILLER_PHRASES = tuple(
     phrase.strip().casefold()
@@ -121,6 +124,8 @@ class RAGSession:
     turn_count: int = 0
     context: ConversationContext = field(default_factory=ConversationContext)
     query_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    speaker_verified: bool = False
+    verified_display_name: str | None = None
 
 
 RAG_SESSION_IDLE_SECONDS = float(os.getenv("RAG_SESSION_IDLE_SECONDS", "300"))
@@ -383,7 +388,7 @@ def _has_meaningful_overlap(query: str, item: dict[str, Any]) -> bool:
 
 def is_grounded(response: str, facts: list[str]) -> bool:
     """Check faithfulness only; relevance is enforced by retrieval and answerability."""
-    response_tokens = _tokens(response)
+    response_tokens = _tokens(without_attribution(response))
     fact_tokens = _tokens(" ".join(facts))
     if not response_tokens or not fact_tokens:
         return False
@@ -391,6 +396,16 @@ def is_grounded(response: str, facts: list[str]) -> bool:
     fact_claims = {token for token in fact_tokens if token not in _GROUNDING_GLUE}
     if not response_claims:
         return False
+    # New factual words cannot hide inside a long otherwise-grounded answer.
+    # Also preserve simple claim-to-record bindings rather than allowing values
+    # from one record to be assigned to another. This is conservative bounded
+    # validation, not a general natural-language entailment model.
+    record_claims = [{token for token in _tokens(fact) if token not in _GROUNDING_GLUE}
+                     for fact in facts]
+    for clause in re.split(r"\s+(?:and|but)\s+|[.!?]\s+", without_attribution(response), flags=re.I):
+        claims = {token for token in _tokens(without_attribution(clause)) if token not in _GROUNDING_GLUE}
+        if claims and not any(claims <= record for record in record_claims):
+            return False
     coverage = sum(token in fact_claims for token in response_claims) / len(response_claims)
     similarity = SequenceMatcher(None, " ".join(response_tokens), " ".join(fact_tokens)).ratio()
     return coverage >= 0.9 and similarity >= 0.45
@@ -439,6 +454,9 @@ class RAGResult:
     llm_latency_ms: float | None = None
     retrieved_record_ids: tuple[str, ...] = ()
     context_topics: tuple[str, ...] = ()
+    resolved_subject: str | None = None
+    requested_relation: str | None = None
+    requested_relation_known: bool | None = None
 
 
 def _diagnostic_headers(
@@ -554,15 +572,38 @@ class RestrictedRAGPipeline:
             for item in matches
         ), key=topic_position))
         topics = tuple(topic for topic in topics if topic)
+        subject_terms = set(_retrieval_terms(topics[0])) if topics else set()
+        query_term_set = set(query_terms)
+        subject_referenced = bool(query_term_set and subject_terms) and (
+            query_term_set <= subject_terms or subject_terms <= query_term_set)
+        plan = build_answer_plan(query, matches, subject_referenced=subject_referenced)
+        plan_metadata = {"resolved_subject": plan.resolved_subject,
+                         "requested_relation": plan.requested_relation,
+                         "requested_relation_known": plan.requested_relation_known}
+        prompt += (
+            f"\nRESOLVED CURRENT QUESTION: {query}\n"
+            f"REQUESTED RELATION: {plan.requested_relation}\n"
+            "Judge answerability only from the current FACTS for this resolved "
+            "question. Previous missing-information statements concern previous "
+            "questions, not this subject. Never carry them into this answer."
+        )
+        missing_response = plan.missing_response()
+        if missing_response:
+            return RAGResult(response=missing_response, source="teachme_grounded",
+                             retrieved_record_ids=record_ids, context_topics=topics,
+                             query_tokens=query_tokens, retrieval_terms=retrieval_terms,
+                             best_similarity=best_similarity, **plan_metadata)
         partial_response = False
         def fallback_result(reason: str) -> RAGResult:
             selected_keys = {item.get("id") or _fact_text(item) for item in matches}
             partial = partial_response or (len(clause_keys) > 1 and any(not (keys & selected_keys) for keys in clause_keys))
             logger.warning("rag_composition fallback=true reason=%s", reason)
             return RAGResult(
-                response=format_memory_fallback(facts, partial=partial), source="teachme_grounded",
+                response=(plan.missing_response(confirmed_missing=partial_response, unavailable=len(matches) == 1)
+                          or format_memory_fallback(facts, partial=partial)), source="teachme_grounded",
                 fallback_used=True, fallback_reason=reason, retrieved_record_ids=record_ids,
                 context_topics=topics,
+                **plan_metadata,
                 query_tokens=query_tokens, retrieval_terms=retrieval_terms,
                 best_similarity=best_similarity,
                 resolved_entity=str(matches[0].get("data", {}).get("subject") or "") or None,
@@ -592,6 +633,7 @@ class RestrictedRAGPipeline:
                 topic_terms = set(_retrieval_terms(str(data.get("subject") or data.get("name") or "")))
                 if query_terms and topic_terms and (query_terms <= topic_terms or topic_terms <= query_terms):
                     partial_response = True
+                    plan_metadata["requested_relation_known"] = False
                     return fallback_result("requested_information_not_learned")
             logger.info("teachme_not_answerable query=%r", query)
             return RAGResult(
@@ -610,6 +652,9 @@ class RestrictedRAGPipeline:
             "", response,
         )
         partial_response = grounded_content != response
+        if partial_response and plan.requested_relation_known is True and len(clause_keys) == 1:
+            response = grounded_content.rstrip(" ,.") + "."
+            partial_response = False
         if not is_grounded(grounded_content, facts):
             return fallback_result("grounding_rejected")
         logger.info("rag_composition fallback=false")
@@ -620,6 +665,7 @@ class RestrictedRAGPipeline:
             response_source="llm", llm_provider=metadata.get("source"),
             llm_model=metadata.get("model"), retrieved_record_ids=record_ids,
             context_topics=topics,
+            **plan_metadata,
             llm_latency_ms=(round(metadata["elapsed_seconds"] * 1000, 2)
                             if isinstance(metadata.get("elapsed_seconds"), (int, float)) else None),
             query_tokens=query_tokens,
@@ -682,6 +728,10 @@ async def start_rag_session(
     """Create a session only from the validated bearer subject after voice verification."""
     claims = require_bearer_session_claims(request)
     session_id, state = create_rag_session(str(claims["sub"]))
+    state.speaker_verified = True
+    users = getattr(request.app.state, "db", {}).get("users", {})
+    user = users.get(state.user_id, {}) if isinstance(users, dict) else {}
+    state.verified_display_name = str(user.get("name") or "").strip() or None
     return {
         "success": True,
         "session_id": session_id,
@@ -726,6 +776,7 @@ async def restricted_query(request: RAGQueryRequest, http_request: Request, resp
         pipeline = RestrictedRAGPipeline(get_teachme_connector(), _llm_client)
         context_used = False
         context_turn_count = 0
+        context_turn_count_before = 0
         context_reset_reason = None
         # Serialize turns within a session so a slow response cannot replace a
         # newer topic. Other users/sessions remain independent.
@@ -737,15 +788,24 @@ async def restricted_query(request: RAGQueryRequest, http_request: Request, resp
             if CONTEXT_ENABLED:
                 try:
                     resolved_query, recent_context = session_state.context.resolve(request.query)
+                    context_turn_count_before = len(session_state.context.turns)
                     context_used = bool(recent_context)
                     context_reset_reason = session_state.context.reset_reason
                 except Exception:
                     logger.exception("conversation_context resolution_failed")
                     resolved_query = request.query
-            result = await _answer_while_connected(
-                pipeline, resolved_query, user_id, http_request,
-                recent_context=recent_context, current_query=request.query,
-            )
+            identity_question = re.fullmatch(r"(?:do|did) you recognize me|am i verified",
+                                            " ".join(_tokens(request.query)))
+            if identity_question and session_state.speaker_verified:
+                identity_response = (f"Yes, I recognized you as {session_state.verified_display_name}."
+                                     if session_state.verified_display_name else
+                                     "Yes, you are verified for this conversation.")
+                result = RAGResult(response=identity_response, source="session_identity")
+            else:
+                result = await _answer_while_connected(
+                    pipeline, resolved_query, user_id, http_request,
+                    recent_context=recent_context, current_query=request.query,
+                )
             _update_session_entity(session_state, result)
             if CONTEXT_ENABLED:
                 try:
@@ -798,6 +858,10 @@ async def restricted_query(request: RAGQueryRequest, http_request: Request, resp
                 "llm_model": result.llm_model, "llm_latency_ms": result.llm_latency_ms,
                 "retrieved_record_ids": list(result.retrieved_record_ids),
                 "context_enabled": CONTEXT_ENABLED, "context_turn_count": context_turn_count,
+                "context_turn_count_before": context_turn_count_before,
+                "resolved_subject": result.resolved_subject,
+                "requested_relation": result.requested_relation,
+                "requested_relation_known": result.requested_relation_known,
                 "context_used": context_used, "context_reset_reason": context_reset_reason}
     except NoSpeechDetected:
         return {"success": True, "status": "no_speech", "response": "No speech detected", "source": "no_speech"}

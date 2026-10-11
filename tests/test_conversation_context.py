@@ -2,6 +2,7 @@
 import sys
 import time
 import asyncio
+import math
 from pathlib import Path
 
 import httpx
@@ -22,7 +23,8 @@ def test_sliding_window_ttl_and_restart(monkeypatch):
     assert counts == [1, 2, 3, 3, 3]
     assert [turn.user_query for turn in window.turns] == ["query 2", "query 3", "query 4"]
     assert not context.ConversationContext().snapshot()
-    assert not window.snapshot(window.last_activity + context.CONTEXT_TTL_SECONDS)
+    expiry = math.nextafter(window.last_activity + context.CONTEXT_TTL_SECONDS, math.inf)
+    assert not window.snapshot(expiry)
     assert window.reset_reason == "ttl_expired"
     assert window.resolve("Why?") == ("Why?", ())
 
@@ -139,17 +141,17 @@ async def test_rest_sliding_goodbye_and_new_session(service):
             counts.append(result.json()["context_turn_count"])
         assert counts == [1, 2, 3, 3, 3]
         assert "My blue camera" in store.queries[1]["query"]
-        assert len(formatter.prompts) == 5
+        assert len(formatter.prompts) == 4
         assert "Recent conversation" in formatter.prompts[1]
         result = await send(client, sid, "Goodbye")
         assert result.json()["context_turn_count"] == 0
         assert result.json()["context_reset_reason"] == "goodbye"
         assert sid not in rag._rag_sessions and not state.context.turns
-        assert len(formatter.prompts) == 5
+        assert len(formatter.prompts) == 4
         new_sid, _ = rag.create_rag_session("context-test-A")
         result = await send(client, new_sid, "Why?")
         assert result.json()["source"] == "no_match"
-        assert not result.json()["context_used"] and len(formatter.prompts) == 5
+        assert not result.json()["context_used"] and len(formatter.prompts) == 4
 
 
 async def test_user_and_session_isolation_and_invalidation(service):
@@ -184,7 +186,7 @@ async def test_context_requeries_memory_and_cannot_ground_historical_claims(serv
         await send(client, sid, "Tell me about my blue camera")
         state.context.append("My blue camera", "Your blue camera is in Paris.", ("camera",), ("My blue camera",))
         formatter.response = "Your blue camera is in Paris."
-        result = (await send(client, sid, "Where is it?")).json()
+        result = (await send(client, sid, "What about it?")).json()
         assert result["fallback_reason"] == "grounding_rejected"
         assert "Paris" not in result["response"]
         assert len(store.queries) == 2 and len(formatter.prompts) == 2
@@ -200,7 +202,7 @@ async def test_unknown_property_and_provider_failure_remain_safe(service):
         await send(client, sid, "Tell me about my blue camera")
         formatter.response = rag.NOT_ANSWERABLE_MARKER
         result = (await send(client, sid, "Why?")).json()
-        assert result["response"].endswith(rag.PARTIAL_KNOWLEDGE_NOTICE)
+        assert result["response"] == "I remember your blue camera, but you haven't taught me why."
         formatter.success = False
         result = (await send(client, sid, "What about it?")).json()
         assert result["fallback_reason"] == "timeout" and result["response"] == "Your blue camera."

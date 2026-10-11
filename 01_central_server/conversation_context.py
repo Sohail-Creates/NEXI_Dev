@@ -12,6 +12,7 @@ CONTEXT_ENABLED = os.getenv("CONTEXT_ENABLED", "1").strip().lower() in {"1", "tr
 CONTEXT_MAX_TURNS = max(1, min(3, int(os.getenv("CONTEXT_MAX_TURNS", "3"))))
 CONTEXT_TTL_SECONDS = max(1.0, float(os.getenv("CONTEXT_TTL_SECONDS", "900")))
 _TEXT_LIMIT = 512  # At most six short text fields in the provider context.
+_PROPERTY_REFERENCE = r"(?:why|how) is (?:it|that|this) .+|what did i tell you about (?:it|that|this)"
 
 
 def _normalize(text: str) -> str:
@@ -24,7 +25,7 @@ def _compact(text: str) -> str:
 
 def is_reference_query(query: str) -> bool:
     text = _normalize(query).rstrip(".?!").casefold()
-    return bool(re.fullmatch(
+    return bool(re.fullmatch(_PROPERTY_REFERENCE, text) or re.fullmatch(
         r"why|how|tell me more|what you just said|"
         r"(?:what about|tell me about) the (?:first|second|other) one|"
         r"(?:what about|tell me about|where is|where are|why is|how is|what is) (?:it|that|this|them)", text))
@@ -70,7 +71,7 @@ class ConversationContext:
             return query, ()
         self.last_activity = time.monotonic()
         normalized = _normalize(query).rstrip(".?!").casefold()
-        named_reference = re.fullmatch(r"(?:tell me(?: again)? about|what about) (?:the|that|this) (.+)", normalized)
+        named_reference = re.fullmatch(r"(?:tell me(?: again)? about|what about) (?:the|that|this) (.+?)(?: again)?", normalized)
         if named_reference:
             terms = set(re.findall(r"\w+", named_reference[1]))
             topics = {topic for turn in turns for topic in turn.topics
@@ -101,6 +102,9 @@ class ConversationContext:
         if len(topics) != 1:
             return query, ()  # A compound antecedent is ambiguous without an ordinal.
         topic = topics[0]
+        topic = re.sub(r"^(?:this|that|it) is\s+", "", topic, flags=re.I)
+        if re.fullmatch(_PROPERTY_REFERENCE, normalized):
+            return re.sub(r"\b(?:it|that|this)\b", lambda _: topic, query.strip(), flags=re.I), turns
         if normalized in {"why", "how", "tell me more", "what you just said"}:
             prefix = normalized if normalized in {"why", "how"} else "Tell me more"
             return f"{prefix} about {topic}?", turns
